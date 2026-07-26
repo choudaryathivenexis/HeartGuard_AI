@@ -505,6 +505,183 @@ def _shell_block() -> str:
 """
 
 
+def _rail_block() -> str:
+    """
+    The Reference Rail.
+
+    Positions arrive as inline `left`/`width` percentages computed in ui/rail.py — the
+    geometry is Python, so it is unit-testable; only appearance lives here.
+    """
+    return f"""
+/* ── Reference Rail ───────────────────────────────────────────────── */
+.hg-rail {{
+  position: relative;
+  width: 100%;
+  padding-top: 18px;          /* room for the notch, which sits ABOVE the track */
+  margin: var(--hg-space-3) 0 var(--hg-space-6);
+  {T.TABULAR}
+}}
+.hg-rail--env, .hg-rail--ci {{ padding-top: 2px; }}
+
+/* head row: name on the left, value on the right */
+.hg-rail__head {{
+  display: flex; align-items: baseline; gap: var(--hg-space-3);
+  margin-bottom: var(--hg-space-2);
+}}
+.hg-rail__name {{
+  font-size: 12px; color: var(--hg-text-muted); flex: 1 1 auto;
+}}
+.hg-rail__value {{
+  font-size: 12.5px; font-weight: {T.WEIGHT['semibold']};
+  color: var(--hg-text-heading);
+}}
+.hg-rail__ci-text {{
+  font-weight: {T.WEIGHT['regular']}; color: var(--hg-text-subtle); font-size: 11.5px;
+}}
+.hg-rail__state {{
+  font-size: 10.5px; text-transform: uppercase;
+  letter-spacing: var(--hg-track-eyebrow);
+  color: var(--hg-hazard-text); background: var(--hg-hazard-surface);
+  border: 1px solid var(--hg-hazard-border);
+  border-radius: var(--hg-radius-sm); padding: 1px var(--hg-space-2);
+}}
+
+/* threshold notch — ink, never a risk colour: it is a boundary, not a reading */
+.hg-rail__notch {{
+  position: absolute; top: 0; transform: translateX(-50%);
+  display: flex; flex-direction: column; align-items: center; z-index: 3;
+}}
+.hg-rail__notch-tick {{
+  width: 0; height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid var(--hg-text-heading);
+}}
+.hg-rail__notch-label {{
+  order: -1;
+  font-size: 9.5px; text-transform: uppercase;
+  letter-spacing: var(--hg-track-eyebrow);
+  color: var(--hg-text-subtle); white-space: nowrap; margin-bottom: 1px;
+}}
+
+/* band strip — labels only. Filling these zones would compete with the one fill that
+   carries information: the measured value. */
+.hg-rail__strip {{ position: relative; height: 13px; margin-bottom: 3px; }}
+.hg-rail__band {{
+  position: absolute; top: 0;
+  font-size: 9.5px; letter-spacing: var(--hg-track-eyebrow);
+  text-align: center; overflow: hidden; white-space: nowrap;
+  text-overflow: ellipsis;
+}}
+
+/* track */
+.hg-rail__track {{
+  position: relative;
+  height: var(--hg-rail-height);
+  background: var(--hg-rail-track);
+  border: 1px solid var(--hg-border);
+  border-radius: var(--hg-radius-sm);
+  overflow: hidden;
+}}
+.hg-rail__track--env {{ height: 12px; }}
+.hg-rail__track--ci, .hg-rail__track--sweep {{ height: var(--hg-rail-height-sm); }}
+
+/* Every fill carries a hairline outline in the band border colour. WCAG 1.4.11 asks
+   for 3:1 on a meaningful graphical object; Borderline is only 2.57:1 against the
+   track unaided, so delineation supplies what fill contrast cannot. */
+.hg-rail__fill {{
+  position: absolute; inset: 0 auto 0 0;
+  border-right: 1px solid var(--hg-text-heading);
+  box-shadow: inset 0 0 0 1px rgba(14,19,26,.14);
+}}
+.hg-rail__fill--anim {{
+  animation: hg-rail-fill var(--hg-duration-slow) var(--hg-ease);
+}}
+@keyframes hg-rail-fill {{ from {{ width: 0 !important; }} }}
+
+.hg-rail__tick {{
+  position: absolute; top: 0; bottom: 0; width: 1px;
+  background: var(--hg-border-strong); z-index: 2;
+}}
+.hg-rail__marker {{
+  position: absolute; top: -3px; bottom: -3px; width: 2px;
+  transform: translateX(-1px);
+  background: var(--hg-surface);
+  border-left: 2px solid; border-right: 0;
+  z-index: 4;
+}}
+.hg-rail__marker--pin {{
+  top: -4px; bottom: -4px; width: 3px;
+  border-left-width: 3px;
+}}
+.hg-rail__marker--point {{
+  top: -3px; bottom: -3px; width: 9px; height: 9px;
+  margin: auto 0; border: 0; border-radius: 50%;
+  transform: translateX(-50%);
+  outline: 2px solid var(--hg-surface);
+}}
+
+/* invalid span — the hazard stripe, the only repeating pattern in the interface */
+.hg-rail__hatch {{ position: absolute; inset: 0 auto 0 0; opacity: .5; z-index: 1; }}
+/* p1-p99: where training support is dense. Context, not a reading. */
+.hg-rail__dense {{
+  position: absolute; inset: 0 auto 0 0;
+  background: var(--hg-primary-tint); z-index: 1;
+}}
+.hg-rail__env {{
+  position: absolute; inset: 0 auto 0 0;
+  border-left: 1px solid var(--hg-border-control);
+  border-right: 1px solid var(--hg-border-control);
+  z-index: 2;
+}}
+
+/* confidence interval span */
+.hg-rail__ci {{
+  position: absolute; top: 50%; height: 4px; transform: translateY(-50%);
+  border-radius: 2px; opacity: .42; z-index: 2;
+}}
+.hg-rail__ref {{
+  position: absolute; top: -5px; bottom: -5px; width: 0;
+  border-left: 1px dashed var(--hg-text-muted); z-index: 3;
+}}
+.hg-rail__ref-label {{
+  position: absolute; top: -13px; left: 3px;
+  font-size: 9px; color: var(--hg-text-subtle); white-space: nowrap;
+}}
+
+/* candidate operating points */
+.hg-rail__cand {{
+  position: absolute; top: -2px; bottom: -2px; width: 1px;
+  background: var(--hg-text-subtle); z-index: 3;
+}}
+.hg-rail__cand--sel {{
+  width: 2px; background: var(--hg-text-heading);
+  top: -4px; bottom: -4px;
+}}
+
+/* numeric labels — endpoints are never dropped */
+.hg-rail__labels {{ position: relative; height: 15px; margin-top: 3px; }}
+.hg-rail__lab {{
+  position: absolute; top: 0;
+  font-size: 10.5px; color: var(--hg-text-subtle); white-space: nowrap;
+}}
+.hg-rail__lab--mid {{ color: var(--hg-text-muted); font-weight: {T.WEIGHT['medium']}; }}
+
+.hg-rail-stack {{ display: flex; flex-direction: column; }}
+.hg-rail-row {{ border-bottom: 1px solid var(--hg-border); }}
+.hg-rail-row:last-child {{ border-bottom: 0; }}
+.hg-rail-row .hg-rail {{ margin-bottom: var(--hg-space-3); }}
+
+/* Below 480px the rail keeps its FULL WIDTH and drops only the intermediate labels.
+   Endpoints and the band strip stay — a rail without endpoints is decoration. */
+@media (max-width: 480px) {{
+  .hg-rail__lab--mid {{ display: none; }}
+  .hg-rail__notch-label {{ display: none; }}
+  .hg-rail__band {{ font-size: 8.5px; }}
+}}
+"""
+
+
 def _legacy_block() -> str:
     """
     Back-compatible rules for the 24 pre-redesign classes.
@@ -723,6 +900,7 @@ def stylesheet() -> str:
         _chrome_block(),
         _widgets_block(),
         _shell_block(),
+        _rail_block(),
         _legacy_block(),
         _tail_block(),
     ])
