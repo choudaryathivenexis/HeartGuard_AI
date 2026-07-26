@@ -10,6 +10,7 @@ import auth_db
 import pages_ext as px
 import feature_engineering as fe
 import clinical_ui as cu
+from ui import styles as ui_styles
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -278,162 +279,17 @@ def get_bg_b64():
     return None
 
 
-# ══════════════════════════════════════════════════════════════════
-# GLOBAL CSS
-# ══════════════════════════════════════════════════════════════════
-_bg_b64 = get_bg_b64()
-_bg_css = (
-    f"background: url('data:image/png;base64,{_bg_b64}') no-repeat center center fixed;"
-    f"background-size: cover;"
-) if _bg_b64 else "background: linear-gradient(135deg,#fff5f5 0%,#ffe4e6 40%,#fecdd3 100%);"
-
-st.markdown(f"""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
-
-html, body, [class*="css"] {{ font-family:'Inter', sans-serif; }}
-
-.stApp {{
-    {_bg_css}
-}}
-.block-container {{
-    background: rgba(255,255,255,0.92);
-    border-radius: 18px;
-    padding: 2rem 2.5rem 2rem 2.5rem;
-    margin-top: 1rem;
-    box-shadow: 0 8px 40px rgba(220,38,38,0.10);
-    backdrop-filter: blur(6px);
-}}
-
-section[data-testid="stSidebar"] {{
-    background: linear-gradient(180deg,#7f1d1d 0%,#991b1b 40%,#b91c1c 100%) !important;
-    border-right: 2px solid #fca5a5;
-}}
-div[data-testid="stSidebarNav"] {{ display:none; }}
-
-section[data-testid="stSidebar"] * {{ color: #fff1f2 !important; }}
-section[data-testid="stSidebar"] .stRadio label {{ color: #fff1f2 !important; font-weight:500; }}
-section[data-testid="stSidebar"] .stRadio div[data-checked="true"] label {{
-    color: #fecdd3 !important; font-weight:700;
-}}
-
-.hg-title {{
-    font-size: 2.4em; font-weight: 800;
-    background: linear-gradient(135deg, #dc2626 0%, #ef4444 60%, #f87171 100%);
-    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-    line-height: 1.2; margin-bottom: 4px;
-}}
-.hg-subtitle {{ color: #6b7280; font-size: 1em; margin-bottom: 20px; }}
-
-.kpi-wrap {{ display:flex; gap:12px; flex-wrap:wrap; margin-bottom:20px; }}
-.kpi-card {{
-    flex:1; min-width:130px; border-radius:14px; padding:18px 14px;
-    text-align:center; border:1px solid; transition: transform .2s;
-    backdrop-filter: blur(4px);
-}}
-.kpi-card:hover {{ transform: translateY(-3px); box-shadow:0 8px 24px rgba(220,38,38,.18); }}
-.kpi-val {{ font-size:2.2em; font-weight:800; }}
-.kpi-lbl {{ font-size:0.78em; color:#6b7280; margin-top:4px; }}
-
-.panel {{
-    background: rgba(255,255,255,0.85);
-    border: 1px solid #fca5a5;
-    border-radius: 14px; padding: 22px; margin-bottom: 16px;
-    box-shadow: 0 2px 12px rgba(220,38,38,0.07);
-}}
-
-.res-risk {{
-    padding:24px; border-radius:16px; text-align:center;
-    background: linear-gradient(145deg,#fff1f2,#ffe4e6);
-    border:2px solid #ef4444; box-shadow:0 8px 30px rgba(239,68,68,.20);
-    margin-bottom:16px;
-}}
-.res-safe {{
-    padding:24px; border-radius:16px; text-align:center;
-    background: linear-gradient(145deg,#f0fdf4,#dcfce7);
-    border:2px solid #10b981; box-shadow:0 8px 30px rgba(16,185,129,.18);
-    margin-bottom:16px;
-}}
-.res-title {{ font-size:2em; font-weight:800; margin:0; }}
-.res-prob {{ font-size:1.3em; color:#1f2937; margin-top:8px; }}
-.res-note {{ font-size:0.85em; color:#6b7280; margin-top:6px; }}
-
-.stButton>button {{
-    background: linear-gradient(135deg,#dc2626,#b91c1c) !important;
-    color:white !important; border:none !important; border-radius:9px !important;
-    font-weight:600 !important; transition:all .25s !important;
-    box-shadow: 0 4px 14px rgba(220,38,38,.35) !important;
-}}
-.stButton>button:hover {{
-    background: linear-gradient(135deg,#ef4444,#dc2626) !important;
-    box-shadow: 0 6px 20px rgba(220,38,38,.50) !important;
-    transform: translateY(-1px) !important;
-}}
-
-.role-badge {{
-    padding:3px 12px; border-radius:20px; font-size:.78em;
-    font-weight:700; display:inline-block; margin-top:4px;
-}}
-.rb-doctor {{ background:rgba(255,255,255,0.25); color:#fff; border:1px solid rgba(255,255,255,0.4); }}
-.rb-admin {{ background:rgba(255,255,255,0.20); color:#fde8d8; border:1px solid rgba(255,255,255,0.3); }}
-.rb-superadmin {{ background:rgba(0,0,0,0.20); color:#fef2f2; border:1px solid rgba(255,255,255,0.2); }}
-
-.user-card {{
-    background:rgba(255,255,255,0.12); border:1px solid rgba(255,255,255,0.25);
-    border-radius:12px; padding:14px; margin-bottom:14px;
-}}
-.user-card div {{ color:#fff1f2 !important; }}
-
-.stDataFrame {{ border-radius:10px; overflow:hidden; }}
-.hg-divider {{ border:none; border-top:2px solid #fca5a5; margin:18px 0; }}
-
-.login-wrap {{
-    background: rgba(255,255,255,0.95);
-    border:2px solid #fca5a5;
-    border-radius:24px;
-    padding:40px 36px;
-    max-width:500px;
-    margin:0 auto;
-    box-shadow: 0 20px 60px rgba(220,38,38,0.18);
-    backdrop-filter: blur(10px);
-}}
-.login-logo {{ font-size:3.8em; text-align:center; margin-bottom:4px; }}
-.login-brand {{
-    font-size:2em; font-weight:800; text-align:center;
-    background:linear-gradient(135deg,#dc2626,#ef4444);
-    -webkit-background-clip:text; -webkit-text-fill-color:transparent;
-}}
-.login-tag {{ text-align:center; color:#9ca3af; font-size:.9em; margin-bottom:28px; }}
-
-.alert-warning {{
-    background:#fff7ed; border:1px solid #f97316; border-radius:10px;
-    padding:12px 16px; color:#c2410c; font-size:.9em; margin:8px 0;
-}}
-.alert-info {{
-    background:#eff6ff; border:1px solid #bfdbfe; border-radius:10px;
-    padding:12px 16px; color:#1d4ed8; font-size:.9em; margin:8px 0;
-}}
-
-.stTextInput input, .stNumberInput input, .stSelectbox select, .stTextArea textarea {{
-    background: #fff !important;
-    border: 1px solid #fca5a5 !important;
-    border-radius: 8px !important;
-    color: #1f2937 !important;
-}}
-.stTextInput input:focus, .stNumberInput input:focus {{
-    border-color: #ef4444 !important;
-    box-shadow: 0 0 0 2px rgba(239,68,68,.15) !important;
-}}
-
-.stTabs [data-baseweb="tab"] {{ color: #6b7280 !important; }}
-.stTabs [aria-selected="true"] {{
-    color: #dc2626 !important;
-    border-bottom-color: #dc2626 !important;
-    font-weight: 700 !important;
-}}
-</style>
-""", unsafe_allow_html=True)
-
+# ==================================================================
+# GLOBAL STYLESHEET
+# ==================================================================
+# The previous 154-line inline block lived here. It is now generated from
+# ui/tokens.py so the palette has exactly one definition - the same discipline
+# feature_engineering.py enforces for the feature contract.
+#
+# Injection order is load-bearing: set_page_config -> inject() -> any widget.
+# The stylesheet is cached, so it is built once per process rather than rebuilt on
+# every rerun (which would flash unstyled content as the <style> block re-mounts).
+ui_styles.inject()
 
 # ══════════════════════════════════════════════════════════════════
 # MODEL LOADING

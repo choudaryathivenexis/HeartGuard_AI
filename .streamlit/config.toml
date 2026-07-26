@@ -1,0 +1,147 @@
+# HeartGuard AI — Streamlit base theme
+# =====================================
+# Recon found 262 supported [theme] keys in Streamlit 1.59.2 (178 light + 84 dark).
+# That is far more than the classic five, so a large share of the visual target is
+# reachable natively — which matters because every rule expressed here is one rule NOT
+# expressed as injected CSS fighting Streamlit's own styles.
+#
+# Values are the Brand Six and their derived ramps from ui/tokens.py. They are
+# duplicated here only because TOML cannot import Python; tests/test_tokens.py has a
+# guard that keeps the two in sync.
+#
+# WHAT THIS FILE DELIBERATELY DOES NOT DO
+# ---------------------------------------
+# It does not attempt component layout, the Reference Rail, the risk bands or the
+# hazard treatment. Those need real CSS. This file exists to make Streamlit's OWN
+# widgets — buttons, inputs, tabs, dataframes, alerts — start from the brand palette
+# instead of Streamlit red, so the injected stylesheet can be additive rather than
+# corrective.
+
+[theme]
+base = "light"
+
+# ── Type ─────────────────────────────────────────────────────────────────
+# Families are loaded by the @import in ui/styles.py (Google Fonts, per §1.3 — no new
+# Python dependency). Named here so Streamlit's own widgets adopt them too.
+font = "IBM Plex Sans, -apple-system, Segoe UI, sans-serif"
+headingFont = "Archivo, Helvetica Neue, Arial, sans-serif"
+codeFont = "IBM Plex Mono, SFMono-Regular, Consolas, monospace"
+baseFontSize = 14
+baseFontWeight = 400
+
+# ── Geometry ─────────────────────────────────────────────────────────────
+# Enterprise density, not consumer softness. Nothing is a pill except status chips,
+# and those are built in our own CSS.
+baseRadius = "0.3rem"
+buttonRadius = "0.3rem"
+
+# ── Surfaces & structure ─────────────────────────────────────────────────
+backgroundColor = "#F4F6F8"           # Bone — app canvas
+secondaryBackgroundColor = "#FFFFFF"  # neutral-0 — panels, inputs, sidebar cards
+textColor = "#3E4856"                 # neutral-700 — body
+borderColor = "#D8DDE4"               # neutral-200 — decorative hairline
+dataframeBorderColor = "#D8DDE4"
+dataframeHeaderBackgroundColor = "#E9ECF0"   # neutral-100
+codeBackgroundColor = "#E9ECF0"
+codeTextColor = "#2A323D"
+linkColor = "#12756B"                 # Verdigris — interaction only
+linkUnderline = true
+showWidgetBorder = true
+showSidebarBorder = true
+
+# ── Interaction ──────────────────────────────────────────────────────────
+# Verdigris marks interaction and identity, never decoration.
+primaryColor = "#12756B"
+
+# ── Semantic widget colours ──────────────────────────────────────────────
+# Streamlit maps st.info/success/warning/error and st.badge onto these named slots.
+# Overriding them keeps native alerts inside the Brand Six instead of introducing
+# Streamlit's own blue, green, orange and red — which would be four foreign hues.
+#
+# `blue` is remapped to the SLATE family on purpose: `info` must not read as a fifth
+# risk level, and a blue beside the clinical ramp does exactly that.
+blueColor = "#3E4856"
+blueTextColor = "#3E4856"
+blueBackgroundColor = "#EDEFF3"
+
+greenColor = "#14654E"
+greenTextColor = "#14654E"
+greenBackgroundColor = "#E7F3EE"
+
+orangeColor = "#7A5410"
+orangeTextColor = "#7A5410"
+orangeBackgroundColor = "#FBF2DF"
+
+redColor = "#8C1D33"
+redTextColor = "#8C1D33"
+redBackgroundColor = "#FAE7EA"
+
+grayColor = "#566171"
+grayTextColor = "#566171"
+grayBackgroundColor = "#E9ECF0"
+
+# ── Charts ───────────────────────────────────────────────────────────────
+# Model series order matches ui.tokens.SERIES. Iris (#6B5CA5) is the single declared
+# extension to the six, permitted only inside data visualisation.
+chartCategoricalColors = [
+    "#12756B",  # Verdigris — Logistic Regression
+    "#C08A1E",  # Amber     — Decision Tree
+    "#C2404F",  # Crimson   — XGBoost
+    "#566171",  # Slate     — SVM
+    "#6B5CA5",  # Iris      — Random Forest
+    "#0E131A",  # Ink       — Ensemble Voting
+]
+chartSequentialColors = [
+    "#E6F4F1", "#C2E5DE", "#8ECFC4", "#52B3A5",
+    "#229184", "#12756B", "#0E5F57", "#0B4A44", "#073632",
+]
+# Diverging runs Verdigris -> Bone -> Crimson. Used for calibration gaps and SHAP,
+# where the midpoint is neutral and both directions carry meaning.
+chartDivergingColors = [
+    "#0B4A44", "#12756B", "#52B3A5", "#C2E5DE", "#F4F6F8",
+    "#EDBCC6", "#D4788B", "#C22B4A", "#8C1D33",
+]
+
+# ════════════════════════════════════════════════════════════════════════
+# Dark mode — clinicians read in dim rooms.
+# ════════════════════════════════════════════════════════════════════════
+# Risk surfaces are NOT the light tints at lower opacity: those turn to mud on a dark
+# canvas. Dark risk surfaces are the rail colour at low alpha over the dark canvas,
+# generated in ui/tokens.DARK_RISK. Primary shifts to verdigris-300 for contrast.
+[theme.dark]
+backgroundColor = "#0E131A"           # Ink — dark canvas
+secondaryBackgroundColor = "#151B24"
+textColor = "#E4E8ED"
+borderColor = "#2A323D"
+dataframeBorderColor = "#2A323D"
+dataframeHeaderBackgroundColor = "#1D2530"
+codeBackgroundColor = "#1D2530"
+codeTextColor = "#E4E8ED"
+linkColor = "#52B3A5"                 # verdigris-300 — needs the lift on dark
+primaryColor = "#52B3A5"
+
+blueColor = "#A8B2BF"
+blueTextColor = "#A8B2BF"
+blueBackgroundColor = "#1D2530"
+
+greenColor = "#7FCBB2"
+greenTextColor = "#7FCBB2"
+greenBackgroundColor = "#14302A"
+
+orangeColor = "#E0BE74"
+orangeTextColor = "#E0BE74"
+orangeBackgroundColor = "#332813"
+
+redColor = "#E4919F"
+redTextColor = "#E4919F"
+redBackgroundColor = "#33161D"
+
+grayColor = "#A8B2BF"
+grayTextColor = "#A8B2BF"
+grayBackgroundColor = "#1D2530"
+
+[server]
+headless = true
+
+[browser]
+gatherUsageStats = false
