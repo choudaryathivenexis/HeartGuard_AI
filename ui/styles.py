@@ -288,18 +288,22 @@ def _shell_block() -> str:
     """
     from . import icons as I
 
+    # One rule per icon. The container key no longer encodes active state (see
+    # components.sidebar_nav), so a single selector covers both, halving 36 rules to 18
+    # and reclaiming ~7.5 KB of the 60 KB CSS budget.
+    # Each data URI is declared ONCE as a custom property and consumed by the shared
+    # ::before rule below, which applies both the prefixed and unprefixed mask. Emitting
+    # `mask-image:<uri>; -webkit-mask-image:<uri>` per icon duplicated every payload and
+    # cost ~7.5 KB of the 60 KB budget for nothing. Safari needed the prefix until 15.4,
+    # so dropping it outright is not an option — declaring the value once is.
     icon_rules = []
     for label, icon_name in sorted(I.NAV_ICON.items()):
-        sl = I.slug(label)
-        uri = I.to_data_uri(icon_name)
         icon_rules.append(
-            f'.st-key-nav-on-{sl} button::before,'
-            f'.st-key-nav-off-{sl} button::before{{mask-image:{uri};'
-            f'-webkit-mask-image:{uri};}}')
-    signout_uri = I.to_data_uri("signout")
+            f'.st-key-nav-{I.slug(label)} button::before'
+            f'{{--hg-nav-icon:{I.to_data_uri(icon_name)};}}')
     icon_rules.append(
-        f'.st-key-nav-signout button::before{{mask-image:{signout_uri};'
-        f'-webkit-mask-image:{signout_uri};}}')
+        f'.st-key-nav-signout button::before'
+        f'{{--hg-nav-icon:{I.to_data_uri("signout")};}}')
 
     return f"""
 /* ── sidebar: brand ───────────────────────────────────────────────── */
@@ -344,9 +348,7 @@ def _shell_block() -> str:
 /* ── sidebar: navigation items ────────────────────────────────────── */
 /* One button per item inside a keyed container. Streamlit sets inline styles on the
    button element, so the resets below need !important to land. */
-[class*="st-key-nav-on-"] button,
-[class*="st-key-nav-off-"] button,
-.st-key-nav-signout button {{
+[class*="st-key-nav-"] button {{
   display: flex !important;               /* overrides Streamlit's inline display */
   align-items: center;
   gap: var(--hg-space-3);
@@ -365,23 +367,24 @@ def _shell_block() -> str:
   transition: background var(--hg-duration-fast) var(--hg-ease),
               color var(--hg-duration-fast) var(--hg-ease);
 }}
-[class*="st-key-nav-on-"] button::before,
-[class*="st-key-nav-off-"] button::before,
-.st-key-nav-signout button::before {{
+[class*="st-key-nav-"] button::before {{
   content: '';
   width: 18px; height: 18px;
   flex: 0 0 auto;
   background: currentColor;               /* the mask supplies the shape */
+  mask-image: var(--hg-nav-icon); -webkit-mask-image: var(--hg-nav-icon);
   mask-repeat: no-repeat; -webkit-mask-repeat: no-repeat;
   mask-position: center; -webkit-mask-position: center;
   mask-size: contain; -webkit-mask-size: contain;
 }}
-[class*="st-key-nav-off-"] button:hover {{
+[class*="st-key-nav-"] button[kind="secondary"]:hover {{
   background: var(--hg-sunken) !important;
   color: var(--hg-text);
 }}
-/* Active item: tinted fill and a 2px accent edge — not a solid verdigris block. */
-[class*="st-key-nav-on-"] button {{
+/* Active item: tinted fill and a 2px accent edge — NOT a solid verdigris block, even
+   though Streamlit's primary kind normally means exactly that. The nav rules come after
+   the widget block in the cascade, so these win. */
+[class*="st-key-nav-"] button[kind="primary"] {{
   background: var(--hg-primary-tint) !important;
   border-left-color: var(--hg-primary) !important;
   color: var(--hg-primary);
@@ -682,6 +685,194 @@ def _rail_block() -> str:
 """
 
 
+def _components_block() -> str:
+    """Stats, alerts, the clinical verdict, operating point, reliability, tables."""
+    hatch_edge = (
+        f"repeating-linear-gradient(45deg,"
+        f"{T.HAZARD['stripe_a']} 0 3px,"
+        f"{T.HAZARD['stripe_b']} 3px 6px)"
+    )
+    return f"""
+/* ── stats ────────────────────────────────────────────────────────── */
+/* Hairline-separated strip, not floating cards. The grid background supplies the 1px
+   gaps so four figures read as one instrument panel. No shadows — §3.5 prefers
+   hairlines for structure, and a card that always casts a shadow reads as a template. */
+.hg-stat-grid {{
+  display: grid;
+  grid-template-columns: repeat(var(--hg-stat-cols, 4), minmax(0, 1fr));
+  gap: 1px;
+  background: var(--hg-border);
+  border: 1px solid var(--hg-border);
+  border-radius: var(--hg-radius-lg);
+  overflow: hidden;
+  margin-bottom: var(--hg-space-6);
+}}
+.hg-stat {{
+  background: var(--hg-surface);
+  padding: var(--hg-space-5);
+  display: flex; flex-direction: column; gap: 2px;
+}}
+.hg-stat__label {{
+  font-size: 11px; font-weight: {T.WEIGHT['medium']};
+  text-transform: uppercase; letter-spacing: var(--hg-track-eyebrow);
+  color: var(--hg-text-muted);
+}}
+.hg-stat__value {{
+  font-family: var(--hg-font-display);
+  font-size: 30px; font-weight: {T.WEIGHT['semibold']};
+  letter-spacing: var(--hg-track-tight);
+  color: var(--hg-text-heading); line-height: 1.05;
+}}
+.hg-stat__delta {{ font-size: 12px; font-weight: {T.WEIGHT['medium']}; }}
+.hg-stat__delta--low, .hg-stat__delta--success {{ color: var(--hg-risk-low-text); }}
+.hg-stat__delta--high, .hg-stat__delta--danger {{ color: var(--hg-risk-high-text); }}
+.hg-stat__delta--warning {{ color: var(--hg-warning-text); }}
+.hg-stat__hint {{ font-size: 11.5px; color: var(--hg-text-subtle); }}
+.hg-stat--low .hg-stat__value {{ color: var(--hg-risk-low-text); }}
+.hg-stat--high .hg-stat__value {{ color: var(--hg-risk-high-text); }}
+
+/* ── alerts ───────────────────────────────────────────────────────── */
+.hg-alert {{
+  display: flex; gap: var(--hg-space-4);
+  padding: var(--hg-space-4) var(--hg-space-5);
+  border: 1px solid; border-left-width: 3px;
+  border-radius: var(--hg-radius-md);
+  margin: var(--hg-space-3) 0;
+  font-size: 13px; line-height: 1.6;
+}}
+.hg-alert__icon {{ flex: 0 0 auto; margin-top: 1px; }}
+.hg-alert__title {{ font-weight: {T.WEIGHT['semibold']}; }}
+.hg-alert__body {{ margin-top: 3px; }}
+.hg-alert__list {{ margin: var(--hg-space-2) 0 0 var(--hg-space-5); padding: 0; }}
+.hg-alert--info {{ background: var(--hg-info-surface); border-color: var(--hg-info-border); border-left-color: var(--hg-text-muted); color: var(--hg-info-text); }}
+.hg-alert--success {{ background: var(--hg-success-surface); border-color: var(--hg-success-border); border-left-color: var(--hg-success-text); color: var(--hg-success-text); }}
+.hg-alert--warning {{ background: var(--hg-warning-surface); border-color: var(--hg-warning-border); border-left-color: var(--hg-warning-text); color: var(--hg-warning-text); }}
+.hg-alert--danger {{ background: var(--hg-danger-surface); border-color: var(--hg-danger-border); border-left-color: var(--hg-danger-text); color: var(--hg-danger-text); }}
+
+/* Extrapolation is NOT a severity — it is a validity failure, so it takes no risk
+   colour. The Ink+Amber hazard stripe is the only repeating pattern in the interface,
+   which makes it unmistakable and impossible to read as "worse than High". */
+.hg-alert--extrapolation {{
+  background: var(--hg-hazard-surface);
+  border-color: var(--hg-hazard-border);
+  border-left: 6px solid transparent;
+  border-image: {hatch_edge} 1;
+  color: var(--hg-hazard-text);
+}}
+.hg-alert--extrapolation .hg-alert__title {{ letter-spacing: .2px; }}
+
+/* ── the clinical verdict ─────────────────────────────────────────── */
+.hg-verdict {{
+  background: var(--hg-surface);
+  border: 1px solid var(--hg-border);
+  border-radius: var(--hg-radius-xl);
+  padding: var(--hg-space-6);
+  margin-bottom: var(--hg-space-5);
+}}
+.hg-verdict--extrap {{ border-color: var(--hg-hazard-border); }}
+.hg-verdict__row {{
+  display: flex; align-items: center; gap: var(--hg-space-5);
+  margin: var(--hg-space-2) 0 var(--hg-space-2);
+}}
+/* Archivo Expanded 600 at 64px, tabular. The figure is the reading — it earns the
+   display face and the size, and nothing decorative sits behind it. */
+.hg-verdict__prob {{
+  font-family: var(--hg-font-display);
+  font-size: 64px; font-weight: {T.WEIGHT['semibold']};
+  font-variation-settings: 'wdth' 112;
+  letter-spacing: var(--hg-track-tighter);
+  line-height: 1; {T.TABULAR}
+}}
+/* Band chip BESIDE the figure, never below it. */
+.hg-verdict__band {{ display: flex; flex-direction: column; gap: var(--hg-space-2); }}
+.hg-verdict__extrap {{
+  font-size: 10px; text-transform: uppercase;
+  letter-spacing: var(--hg-track-eyebrow);
+  color: var(--hg-hazard-text); background: var(--hg-hazard-surface);
+  border: 1px solid var(--hg-hazard-border);
+  border-radius: var(--hg-radius-sm); padding: 1px var(--hg-space-2);
+}}
+.hg-verdict__action {{
+  font-size: 13px; color: var(--hg-text); line-height: 1.6;
+  padding-top: var(--hg-space-3); border-top: 1px solid var(--hg-border);
+}}
+
+/* ── operating point & reliability ────────────────────────────────── */
+.hg-op, .hg-rel {{
+  background: var(--hg-raised);
+  border: 1px solid var(--hg-border);
+  border-radius: var(--hg-radius-lg);
+  padding: var(--hg-space-5);
+  margin-bottom: var(--hg-space-4);
+}}
+.hg-op .hg-eyebrow, .hg-rel .hg-eyebrow {{ margin-top: 0; }}
+.hg-op__grid, .hg-rel__grid {{
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(84px, 1fr));
+  gap: var(--hg-space-4) var(--hg-space-5);
+}}
+.hg-op__k {{
+  font-size: 10.5px; text-transform: uppercase;
+  letter-spacing: var(--hg-track-eyebrow); color: var(--hg-text-subtle);
+}}
+.hg-op__v {{
+  font-size: 14px; font-weight: {T.WEIGHT['semibold']};
+  color: var(--hg-text-heading); {T.TABULAR}
+}}
+.hg-op__source {{
+  font-size: 12px; color: var(--hg-text-muted);
+  margin-top: var(--hg-space-4); padding-top: var(--hg-space-3);
+  border-top: 1px solid var(--hg-border); line-height: 1.6;
+}}
+.hg-rel__head {{
+  display: flex; align-items: center; gap: var(--hg-space-3);
+  margin-bottom: var(--hg-space-2);
+}}
+/* Rating as TEXT as well as colour — §3.3 forbids meaning carried by hue alone. */
+.hg-rel__rating {{
+  font-family: var(--hg-font-display);
+  font-size: 18px; font-weight: {T.WEIGHT['semibold']};
+  color: var(--hg-text-heading);
+}}
+.hg-rel__grid {{ margin-top: var(--hg-space-3); }}
+
+/* ── static tables ───────────────────────────────────────────────── */
+.hg-tbl-wrap {{
+  border: 1px solid var(--hg-border);
+  border-radius: var(--hg-radius-lg);
+  overflow-x: auto;                 /* wide tables scroll themselves, never the page */
+  margin-bottom: var(--hg-space-5);
+}}
+.hg-tbl {{ width: 100%; border-collapse: collapse; font-size: 12.5px; }}
+.hg-tbl th {{
+  text-align: left; padding: var(--hg-space-3) var(--hg-space-4);
+  background: var(--hg-sunken);
+  font-size: 10.5px; font-weight: {T.WEIGHT['semibold']};
+  text-transform: uppercase; letter-spacing: var(--hg-track-eyebrow);
+  color: var(--hg-text-muted);
+  border-bottom: 1px solid var(--hg-border);
+  white-space: nowrap;
+}}
+.hg-tbl td {{
+  padding: var(--hg-space-3) var(--hg-space-4);
+  border-bottom: 1px solid var(--hg-border);
+  color: var(--hg-text); {T.TABULAR}
+}}
+.hg-tbl tbody tr:last-child td {{ border-bottom: 0; }}
+.hg-tbl tbody tr:hover td {{ background: var(--hg-sunken); }}
+.hg-tbl--num {{ text-align: right; }}
+.hg-tbl__row--hl td {{
+  background: var(--hg-primary-tint);
+  font-weight: {T.WEIGHT['semibold']};
+}}
+
+@media (max-width: 768px) {{
+  .hg-stat-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
+  .hg-verdict__prob {{ font-size: 48px; }}
+  .hg-verdict__row {{ gap: var(--hg-space-4); }}
+}}
+"""
+
+
 def _legacy_block() -> str:
     """
     Back-compatible rules for the 24 pre-redesign classes.
@@ -901,6 +1092,7 @@ def stylesheet() -> str:
         _widgets_block(),
         _shell_block(),
         _rail_block(),
+        _components_block(),
         _legacy_block(),
         _tail_block(),
     ])

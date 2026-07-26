@@ -31,7 +31,8 @@ import streamlit as st
 from . import brand as B
 from . import icons as I
 from . import tokens as T
-from .format import esc
+from .format import (esc, pct, metric3, count, signed, reliability_rating,
+                     threshold as fmt_threshold)
 
 # Tones permitted for clinical state (tinted surface + coloured text).
 CLINICAL_TONES = set(T.RISK_ORDER)
@@ -194,12 +195,15 @@ def sidebar_nav(user: dict, pages: list[str], active: str) -> str:
     for group, items in nav_groups_for(pages):
         sb.markdown(eyebrow(group), unsafe_allow_html=True)
         for label in items:
-            is_active = (label == active)
-            slug = I.slug(label)
-            state = "on" if is_active else "off"
-            with sb.container(key=f"nav-{state}-{slug}"):
-                if st.button(label, key=f"navbtn-{slug}",
-                             use_container_width=True):
+            # The container key does NOT encode active state. It used to
+            # (nav-on-<slug> / nav-off-<slug>), which forced TWO icon-mask selectors per
+            # item — 36 rules and ~15 KB of the CSS budget for 18 icons. Active state is
+            # now carried by the button's own `type`, so the key is stable and one mask
+            # rule per icon suffices.
+            with sb.container(key=f"nav-{I.slug(label)}"):
+                if st.button(label, key=f"navbtn-{I.slug(label)}",
+                             use_container_width=True,
+                             type="primary" if label == active else "secondary"):
                     selected = label
     return selected
 
@@ -257,8 +261,237 @@ def empty_state(title: str, body: str, action: str | None = None) -> None:
         unsafe_allow_html=True)
 
 
+# ════════════════════════════════════════════════════════════════════════
+# Statistics
+# ════════════════════════════════════════════════════════════════════════
+def stat(label: str, value: str, delta: str | None = None,
+         hint: str | None = None, tone: str = "default") -> str:
+    """
+    A single measured figure. Label above value, tabular figures mandatory.
+
+    Callers pass ALREADY-FORMATTED strings. Formatting lives in ui/format.py so the
+    decimal discipline in §3.4 is enforced once rather than at every call site — the
+    codebase previously mixed :.1%, :.2%, :.3f and :.4f for the same quantity depending
+    on which call site you happened to read.
+    """
+    d = (f'<div class="hg-stat__delta hg-stat__delta--{esc(tone)}">{esc(delta)}</div>'
+         if delta else "")
+    h = f'<div class="hg-stat__hint">{esc(hint)}</div>' if hint else ""
+    return (f'<div class="hg-stat hg-stat--{esc(tone)}">'
+            f'<div class="hg-stat__label">{esc(label)}</div>'
+            f'<div class="hg-stat__value">{esc(value)}</div>{d}{h}</div>')
+
+
+def stat_grid(stats: list[dict], cols: int = 4) -> None:
+    """
+    A strip of equal-height figures separated by hairlines.
+
+    Deliberately NOT floating cards: §3.5 prefers hairline borders over shadows, and a
+    dashboard where every tile casts a shadow reads as a template. The grid background
+    supplies the 1px gaps, so the strip reads as one instrument panel rather than four
+    detached objects.
+    """
+    cells = "".join(stat(**s) for s in stats)
+    st.markdown(
+        f'<div class="hg-stat-grid" style="--hg-stat-cols:{int(cols)};">{cells}</div>',
+        unsafe_allow_html=True)
+
+
+# ════════════════════════════════════════════════════════════════════════
+# Alerts
+# ════════════════════════════════════════════════════════════════════════
+def alert(severity: str, title: str, body: str | None = None,
+          items: list[str] | None = None) -> None:
+    """
+    System or clinical notice.
+
+    `severity` ∈ {info, success, warning, danger, extrapolation}.
+
+    `extrapolation` is not a severity level — it is a VALIDITY FAILURE, so it gets no
+    risk colour at all. It carries the Ink+Amber hazard stripe as a 6px left edge, the
+    only repeating pattern anywhere in the interface. A black-and-amber stripe reads
+    universally as "boundary crossed" rather than "worse than High", which is exactly
+    the distinction that matters: an extrapolated reading is off the scale, not high on
+    it.
+    """
+    sev = severity if severity in SEMANTIC_TONES else "info"
+    icon_name = {"info": "info", "success": "check", "warning": "warning",
+                 "danger": "warning", "extrapolation": "warning"}.get(sev, "info")
+    lis = ("<ul class=\"hg-alert__list\">"
+           + "".join(f"<li>{esc(i)}</li>" for i in items) + "</ul>") if items else ""
+    bod = f'<div class="hg-alert__body">{esc(body)}</div>' if body else ""
+    st.markdown(
+        f'<div class="hg-alert hg-alert--{esc(sev)}" role="alert">'
+        f'<div class="hg-alert__icon">{I.to_svg(icon_name, 16)}</div>'
+        f'<div class="hg-alert__content">'
+        f'<div class="hg-alert__title">{esc(title)}</div>{bod}{lis}'
+        f'</div></div>',
+        unsafe_allow_html=True)
+
+
+# ════════════════════════════════════════════════════════════════════════
+# The clinical hero
+# ════════════════════════════════════════════════════════════════════════
+def risk_verdict(prob: float, band_label: str, band_key: str,
+                 bands: tuple[float, float, float], threshold: float,
+                 action: str, extrapolated: bool = False,
+                 animate: bool = True) -> None:
+    """
+    The highest-stakes component in the application.
+
+    `bands` and `threshold` are passed in rather than recomputed, so the rail can never
+    disagree with the verdict the app already decided — the same discipline the rail
+    module follows.
+
+    The eyebrow reads SCREENING RESULT, not "Diagnosis". §3.10 fixes that vocabulary:
+    a positive means *further testing indicated*, never *disease present*. A tool at
+    0.85 sensitivity misses roughly one diseased patient in six, and no visual treatment
+    here may make a "Low" verdict read as reassurance.
+    """
+    from . import rail as R
+
+    colour = T.RISK[band_key]["rail"]
+    tag = ' <span class="hg-verdict__extrap">extrapolated</span>' if extrapolated else ""
+    cls = "hg-verdict" + (" hg-verdict--extrap" if extrapolated else "")
+
+    st.markdown(
+        f'<div class="{cls}">'
+        f'{eyebrow("Screening result")}'
+        f'<div class="hg-verdict__row">'
+        f'<div class="hg-verdict__prob" style="color:{colour};">{pct(prob)}</div>'
+        f'<div class="hg-verdict__band">{chip(band_label, band_key)}{tag}</div>'
+        f'</div>'
+        f'{R.risk_rail(prob, bands, threshold, band_key, animate=animate)}'
+        f'<div class="hg-verdict__action">{esc(action)}</div>'
+        f'</div>',
+        unsafe_allow_html=True)
+
+
+def operating_point(threshold: float, sens: float | None, spec: float | None,
+                    ppv: float | None = None, npv: float | None = None,
+                    source: str = "") -> None:
+    """
+    The decision boundary in force, and a plain sentence saying WHY it is that value.
+
+    Disclosing the operating point is not decoration. A clinician cannot calibrate
+    trust in a flag without it, and hiding it is precisely how a hardcoded 0.50 survived
+    unexamined while missing 31% of diseased patients (Run 4).
+    """
+    cells = [("Threshold", fmt_threshold(threshold)),
+             ("Sensitivity", metric3(sens)),
+             ("Specificity", metric3(spec))]
+    if ppv is not None:
+        cells.append(("PPV", metric3(ppv)))
+    if npv is not None:
+        cells.append(("NPV", metric3(npv)))
+    body = "".join(
+        f'<div class="hg-op__cell"><div class="hg-op__k">{esc(k)}</div>'
+        f'<div class="hg-op__v">{esc(v)}</div></div>' for k, v in cells)
+    src = f'<div class="hg-op__source">{esc(source)}</div>' if source else ""
+    st.markdown(
+        f'<div class="hg-op">{eyebrow("Operating point")}'
+        f'<div class="hg-op__grid">{body}</div>{src}</div>',
+        unsafe_allow_html=True)
+
+
+def reliability_panel(auc_value: float | None, ci_lo: float | None,
+                      ci_hi: float | None, cal_gap: float | None,
+                      n: int | None, band_label: str = "",
+                      caution: str | None = None,
+                      overall: float | None = None) -> None:
+    """
+    How well the model performs for THIS KIND of patient.
+
+    Rating is rendered as TEXT (Strong / Moderate / Limited) alongside the rail, never
+    as colour alone — §3.3 forbids encoding meaning in hue, and a clinician with
+    deuteranopia must read the same information as everyone else.
+
+    This panel exists because aggregate AUC concealed that discrimination ranges from
+    0.84 under 45 to 0.73 in the 55-59 band. Only the aggregate was ever shown.
+    """
+    from . import rail as R
+
+    rating = reliability_rating(auc_value)
+    rating_key = {"Strong": "low", "Moderate": "borderline",
+                  "Limited": "high"}.get(rating, "borderline")
+
+    meta = []
+    if cal_gap is not None:
+        meta.append(("Calibration gap", signed(cal_gap)))
+    if n:
+        meta.append(("Measured on", f"{count(n)} held-out patients"))
+    if band_label:
+        meta.insert(0, ("Patient group", band_label))
+    meta_html = "".join(
+        f'<div class="hg-rel__cell"><div class="hg-op__k">{esc(k)}</div>'
+        f'<div class="hg-op__v">{esc(v)}</div></div>' for k, v in meta)
+
+    rail_html = ""
+    if auc_value is not None:
+        rail_html = R.ci_rail(auc_value, ci_lo, ci_hi, domain=(0.55, 0.90),
+                              reference=overall, reference_label="overall",
+                              label="Discrimination",
+                              colour=T.RISK[rating_key]["rail"])
+
+    st.markdown(
+        f'<div class="hg-rel">{eyebrow("Model reliability for this patient")}'
+        f'<div class="hg-rel__head">'
+        f'<span class="hg-rel__rating">{esc(rating)}</span>'
+        f'{chip(rating + " discrimination", rating_key)}'
+        f'</div>{rail_html}'
+        f'<div class="hg-rel__grid">{meta_html}</div></div>',
+        unsafe_allow_html=True)
+    if caution:
+        alert("warning", "Interpret with extra caution", caution)
+
+
+# ════════════════════════════════════════════════════════════════════════
+# Tables
+# ════════════════════════════════════════════════════════════════════════
+def data_table(df, column_config: dict | None = None, height: int | None = None,
+               key: str | None = None) -> None:
+    """
+    Wraps st.dataframe.
+
+    `st.dataframe` renders to a canvas grid that CSS barely reaches, so `column_config`
+    is the supported route for formatting and alignment — not hand-built HTML. A
+    13,000-row hand-built table would be a performance disaster and is never the answer.
+    """
+    st.dataframe(df, column_config=column_config or None, hide_index=True,
+                 use_container_width=True, height=height, key=key)
+
+
+def static_table(cols: list[str], rows: list[list], highlight: int | None = None,
+                 align_right: set[int] | None = None) -> None:
+    """
+    Hand-built HTML for SMALL comparison tables where full control matters — operating
+    points, candidate thresholds, benchmark comparators.
+
+    Every cell is escaped. Numeric columns are right-aligned so tabular figures line up,
+    which is the whole point of using them.
+    """
+    ar = align_right or set()
+    head = "".join(
+        f'<th class="{"hg-tbl--num" if i in ar else ""}">{esc(c)}</th>'
+        for i, c in enumerate(cols))
+    body = []
+    for r, row in enumerate(rows):
+        cls = ' class="hg-tbl__row--hl"' if highlight == r else ""
+        cells = "".join(
+            f'<td class="{"hg-tbl--num" if i in ar else ""}">{esc(v)}</td>'
+            for i, v in enumerate(row))
+        body.append(f"<tr{cls}>{cells}</tr>")
+    st.markdown(
+        f'<div class="hg-tbl-wrap"><table class="hg-tbl">'
+        f'<thead><tr>{head}</tr></thead><tbody>{"".join(body)}</tbody>'
+        f'</table></div>',
+        unsafe_allow_html=True)
+
+
 __all__ = [
     "eyebrow", "chip", "identifier", "page_header", "section", "panel",
     "sidebar_nav", "sidebar_footer", "footer_meta", "empty_state",
-    "NAV_GROUPS", "nav_groups_for",
+    "stat", "stat_grid", "alert", "risk_verdict", "operating_point",
+    "reliability_panel", "data_table", "static_table",
+    "NAV_GROUPS", "nav_groups_for", "CLINICAL_TONES", "SEMANTIC_TONES",
 ]
