@@ -12,6 +12,7 @@ import feature_engineering as fe
 import clinical_ui as cu
 from ui import styles as ui_styles
 from ui import brand as ui_brand
+from ui import components as uic
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -270,6 +271,8 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+APP_VERSION = "HeartGuard AI v2.1"
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 DATA_PATH = os.path.join(BASE_DIR, "heart.csv")
@@ -396,9 +399,13 @@ def kpi(val, label, color, bg, border):
 
 
 def section_header(icon, title, subtitle=""):
-    sub = f'<p class="hg-subtitle">{subtitle}</p>' if subtitle else ""
-    st.markdown(f'<p class="hg-title">{icon} {title}</p>{sub}', unsafe_allow_html=True)
-    st.markdown('<hr class="hg-divider">', unsafe_allow_html=True)
+    """
+    Adapter onto uic.page_header, kept so the 16 existing call sites need not change
+    in this phase. `icon` is accepted and ignored: the old signature passed single
+    letters ("K", "S", "T", "F", "B") as pseudo-icons, which the icon set replaces.
+    Call sites migrate to page_header directly as each page is rebuilt.
+    """
+    uic.page_header(title, subtitle or None)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -496,26 +503,35 @@ def page_login():
 # SIDEBAR (after login)
 # ══════════════════════════════════════════════════════════════════
 def render_sidebar(user, pages):
-    rb = role_badge(user['role'])
-    # FIXED (BUG-12): user-controlled fields escaped before HTML interpolation.
-    st.sidebar.markdown(f"""
-    <div class="user-card">
-    <div style="font-size:1.05em;font-weight:700;color:#f1f5f9;">{esc(user['fullname'])}</div>
-    {rb}
-    <div style="font-size:.78em;color:#64748b;margin-top:6px;">@{esc(user['username'])}</div>
-    <div style="font-size:.78em;color:#64748b;">{esc(user.get('email', ''))}</div>
-    </div>
-    """, unsafe_allow_html=True)
+    """
+    Render the shell sidebar and return the selected page label.
 
-    choice = st.sidebar.radio("Navigation", pages, label_visibility="collapsed")
-    st.sidebar.markdown("---")
-    if st.sidebar.button("Sign Out", use_container_width=True):
+    The routing contract is unchanged: this still returns a page LABEL that app.py's
+    router matches on, so no route moves. What changed is the mechanism — a single
+    st.radio became one button per item inside a keyed container, because a radio
+    cannot carry an icon, cannot be grouped under eyebrow labels, and cannot take the
+    per-item active treatment §7.1 specifies (a 2px verdigris left border).
+
+    Selection therefore lives in session state rather than in the widget. A click is
+    detected during the sidebar pass, so items already drawn above it still show the
+    previous active state — hence the rerun, which repaints the whole sidebar with the
+    new selection before any main content is built.
+    """
+    active = st.session_state.get("nav_page")
+    if active not in pages:
+        # First visit, or a role change removed the page that was selected.
+        active = pages[0]
+        st.session_state.nav_page = active
+
+    selected = uic.sidebar_nav(user, pages, active)
+    if selected != active:
+        st.session_state.nav_page = selected
+        st.rerun()
+
+    _ver = cu.model_version_info()
+    if uic.sidebar_footer(APP_VERSION, _ver.get("version", "")):
         logout()
-    st.sidebar.markdown("""
-    <div style="color:rgba(255,255,255,0.45);font-size:.72em;text-align:center;margin-top:10px;">
-    HeartGuard AI v2.0 &nbsp;&bull;&nbsp; FYP 2026
-    </div>""", unsafe_allow_html=True)
-    return choice
+    return st.session_state.nav_page
 
 
 # ══════════════════════════════════════════════════════════════════

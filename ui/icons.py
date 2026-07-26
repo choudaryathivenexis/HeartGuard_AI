@@ -367,6 +367,45 @@ def draw_mpl(ax, name: str, color: str = "#0E131A", lw: float = STROKE) -> None:
     ax.axis("off")
 
 
+def slug(label: str) -> str:
+    """Stable CSS-safe slug for a page label. Used for container keys and selectors."""
+    import re as _re
+    return _re.sub(r"[^a-z0-9]+", "-", label.lower()).strip("-")
+
+
+def to_data_uri(name: str, stroke: float = STROKE) -> str:
+    """
+    URL-encoded SVG for use as a CSS `mask-image`.
+
+    WHY A MASK RATHER THAN A BACKGROUND IMAGE
+    -----------------------------------------
+    Streamlit buttons take a plain-text label — inline SVG in a label is escaped, so an
+    icon cannot be placed inside `st.button`. The icon is therefore attached via CSS
+    `::before` on the button.
+
+    A `background-image` data URI would need its colour baked in, which breaks theming:
+    two copies of every icon, switched by `[data-theme]`. Used as a `mask-image` the SVG
+    contributes only its alpha channel and the visible colour comes from
+    `background: currentColor` — so one data URI serves both themes and inherits the
+    text colour automatically, including the active-item accent.
+
+    The stroke is set to a literal colour because mask compositing ignores it; only
+    coverage matters.
+    """
+    body = "".join(_svg_shape(s) for s in ICONS[name])
+    svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {VIEW} {VIEW}" '
+           f'fill="none" stroke="%23000" stroke-width="{stroke}" '
+           f'stroke-linecap="round" stroke-linejoin="round">{body}</svg>')
+    # Minimal percent-encoding — enough for a CSS url() without needing quoting rules.
+    svg = (svg.replace("%23000", "\x00")          # protect the already-encoded hash
+              .replace("#", "%23")
+              .replace("\x00", "%23000")
+              .replace('"', "'")
+              .replace("<", "%3C").replace(">", "%3E")
+              .replace("\n", "").replace("\r", ""))
+    return f"url(\"data:image/svg+xml,{svg}\")"
+
+
 def contact_sheet(path: str = "baseline/icons.png", cols: int = 7,
                   cell_px: int = 84) -> str:
     """
@@ -396,4 +435,5 @@ def contact_sheet(path: str = "baseline/icons.png", cols: int = 7,
     return path
 
 
-__all__ = ["ICONS", "NAV_ICON", "to_svg", "draw_mpl", "contact_sheet", "VIEW", "STROKE"]
+__all__ = ["ICONS", "NAV_ICON", "to_svg", "to_data_uri", "draw_mpl",
+           "contact_sheet", "slug", "VIEW", "STROKE"]
