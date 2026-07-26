@@ -11,6 +11,7 @@ import pages_ext as px
 import feature_engineering as fe
 import clinical_ui as cu
 from ui import styles as ui_styles
+from ui import brand as ui_brand
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -258,9 +259,13 @@ MODEL_COLORS = {
 # ══════════════════════════════════════════════════════════════════
 # PAGE CONFIG
 # ══════════════════════════════════════════════════════════════════
+# page_icon was the literal letter "H". It is now the Caliper Mark, rendered to PNG by
+# ui/brand.py via Pillow (already a matplotlib dependency, so requirements.txt does not
+# grow). favicon_path() returns None if generation failed, and Streamlit falls back to
+# its default icon — a missing favicon must never prevent the app from starting.
 st.set_page_config(
     page_title="HeartGuard AI - Cardiovascular Risk Portal",
-    page_icon="H",
+    page_icon=ui_brand.favicon_path() or "H",
     layout="wide",
     initial_sidebar_state="expanded"
 )
