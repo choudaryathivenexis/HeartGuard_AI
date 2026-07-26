@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+heartguard.db
+heartguard.db.*
+custom_dataset.csv
+system_settings.json
+.backup_pre_fix_*/
+_iotest_snap/

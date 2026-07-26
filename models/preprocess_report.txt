@@ -1,0 +1,147 @@
+
+============================================================
+ HeartGuard - Professional Preprocessing Pipeline
+============================================================
+
+[STEP 1] Loading dataset: I:\Ariha\FYP\HeartGuard FYP\HeartGuard FYP\heart.csv
+
+[STEP 2] Removing duplicate rows (before age rounding)
+
+[STEP 3] Basic housekeeping
+
+[STEP 4] Applying physiological domain filters
+
+[STEP 5] Feature engineering (shared module)
+  Engineered features added: ['bmi', 'pulse_pressure', 'age_group', 'high_risk_flag']
+
+  NOTE: IQR winsorization intentionally removed this run.
+  The domain filter already bounds every field to a clinically plausible range;
+  clipping on top of it flattened 181 severe hypertensives (89% cardio rate)
+  onto the cap, destroying the strongest signal in the dataset. (BUG-07)
+
+------------------------------------------------------------
+ Dataset after preprocessing:
+   Rows  : 70,000 -> 68,645 (98.1% retained)
+   Class distribution: {0: 34684, 1: 33961}
+   Class imbalance ratio: 1.02x
+   Class weighting: none (imbalance 1.02x <= 1.5x, data is balanced)
+------------------------------------------------------------
+
+[STEP 6] Train/Test split (80/20, stratified)
+  Train: 54,916  |  Test: 13,729
+
+[STEP 7] Median imputation (medians fitted on TRAIN split only)
+
+[STEP 8] Correlation-based feature pruning (TRAIN split only)
+  Features used : 15 -> ['age', 'gender', 'height', 'weight', 'ap_hi', 'ap_lo', 'cholesterol', 'gluc', 'smoke', 'alco', 'active', 'bmi', 'pulse_pressure', 'age_group', 'high_risk_flag']
+  Monotonic constraints (XGBoost): 11 of 15 features directionally constrained
+
+[STEP 9] StandardScaler normalization (fit on TRAIN split only)
+  Scaler, feature list & imputer medians saved.
+
+[STEP 10] Generating out-of-fold predictions for threshold selection
+  (thresholds are chosen on OOF training data, never on the holdout)
+
+[STEP 11] Training classifiers
+  [1/5] Logistic Regression
+  [2/5] Support Vector Machine
+  [3/5] Decision Tree
+  [4/5] Random Forest
+  [5/5] XGBoost
+
+[STEP 11] 5-Fold Stratified CV on the TRAINING SPLIT ONLY
+  (Pipeline refits the scaler inside every fold - no preprocessing leakage)
+  CV: Logistic Regression
+  CV: Support Vector Machine (SVM)
+  CV: Decision Tree
+  CV: Random Forest
+  CV: XGBoost
+
+[STEP 12] Deriving ensemble operating point
+  Ensemble weights (proportional to OOF skill above chance):
+    Logistic Regression              OOF_AUC=0.7908  weight=0.1978
+    Support Vector Machine (SVM)     OOF_AUC=0.7905  weight=0.1977
+    Decision Tree                    OOF_AUC=0.7914  weight=0.1983
+    Random Forest                    OOF_AUC=0.7997  weight=0.2039
+    XGBoost                          OOF_AUC=0.7973  weight=0.2023
+  Weighted AUC=0.8000  vs unweighted=0.8000
+  Ensemble: AUC=0.8000  threshold=0.340  Sens=0.8582  Spec=0.5416  missed/1k=70
+
+[STEP 13] Deriving age-stratified operating points
+  age band        thresh    sens    spec  flagged  (global sens)
+  Under 45         0.180   0.839   0.596    52.7%          0.639
+  45-54            0.287   0.856   0.461    67.9%          0.754
+  55-59            0.372   0.842   0.369    75.1%          0.929
+  60 and over      0.486   0.841   0.421    75.0%          0.982
+
+[STEP 14] Subgroup performance report
+  Age band
+    45-54                  n=  5462 prev=0.440 AUC=0.7853 [0.774,0.798]     sens=0.856 calib_gap=+0.010
+    55-59                  n=  3167 prev=0.568 AUC=0.7298 [0.713,0.748]     sens=0.842 calib_gap=-0.012
+    60 and over            n=  3085 prev=0.653 AUC=0.7325 [0.712,0.750]     sens=0.841 calib_gap=-0.004
+    Under 45               n=  2015 prev=0.283 AUC=0.8380 [0.818,0.859]     sens=0.839 calib_gap=-0.005
+  Sex
+    Female                 n=  9035 prev=0.487 AUC=0.8015 [0.794,0.812]     sens=0.908 calib_gap=+0.004
+    Male                   n=  4694 prev=0.510 AUC=0.7969 [0.785,0.809]     sens=0.907 calib_gap=-0.009
+  Cholesterol
+    Above Normal           n=  1849 prev=0.599 AUC=0.7763 [0.756,0.795]     sens=0.953 calib_gap=-0.005
+    Normal                 n= 10310 prev=0.435 AUC=0.7892 [0.781,0.797]     sens=0.872 calib_gap=+0.001
+    Well Above Normal      n=  1570 prev=0.764 AUC=0.6553 [0.624,0.687]     sens=0.997 calib_gap=-0.006
+  Glucose
+    Above Normal           n=   988 prev=0.605 AUC=0.7809 [0.754,0.811]     sens=0.871 calib_gap=-0.019
+    Normal                 n= 11679 prev=0.474 AUC=0.8032 [0.796,0.811]     sens=0.898 calib_gap=-0.000
+    Well Above Normal      n=  1062 prev=0.620 AUC=0.7162 [0.686,0.747]     sens=0.929 calib_gap=+0.014
+  BMI class
+    Normal (<25)           n=  5237 prev=0.389 AUC=0.7971 [0.785,0.809]     sens=0.842 calib_gap=+0.008
+    Obese (30+)            n=  3578 prev=0.625 AUC=0.7639 [0.747,0.780]     sens=0.921 calib_gap=-0.002
+    Overweight (25-30)     n=  4914 prev=0.513 AUC=0.7891 [0.775,0.802]     sens=0.911 calib_gap=-0.008
+  Smoking
+    Non-smoker             n= 12563 prev=0.497 AUC=0.7981 [0.791,0.806]     sens=0.908 calib_gap=-0.002
+    Smoker                 n=  1166 prev=0.467 AUC=0.8188 [0.797,0.843]     sens=0.903 calib_gap=+0.016
+
+[STEP 15] Clinical benchmark - is this better than existing practice?
+  model                                          AUC     vs ML                95% CI   sig
+  HeartGuard ML ensemble                      0.8000
+  BP staging rule (ACC/AHA 2017)              0.7221   +0.0779   [+0.0723,+0.0833]  True
+  Framingham 2008 (proxy)                     0.7060   +0.0941   [+0.0872,+0.1012]  True
+  Clinical logistic regression                0.7912   +0.0089   [+0.0073,+0.0105]  True
+
+[STEP 16] Incremental feature value - would more data help more than more modelling?
+  acquisition step                  #f      AUC    delta
+  Demographics only                  3   0.6429      -  
+  + Blood pressure                   6   0.7851  +0.1422
+  + Body metrics                     9   0.7873  +0.0022
+  + Cholesterol & glucose           12   0.7985  +0.0111
+  + Lifestyle (all features)        15   0.8001  +0.0016
+
+[STEP 17] Ceiling check - do interaction terms add anything?
+  tree     base=0.8001  +interactions=0.7997  delta=-0.0003
+  linear   base=0.7920  +interactions=0.7963  delta=+0.0043
+
+[STEP 18] Building population risk percentile distributions
+  Applicability envelope -> models/input_ranges.json
+    age support: 30-65 years (p1-p99: 40-64)
+  8 age x sex strata + cohort fallback -> models/risk_distribution.json
+  Benchmarks -> models/benchmarks.json
+  Operating thresholds -> models/thresholds.json
+
+------------------------------------------------------------
+ Calibration summary (lower Brier/ECE is better):
+   model                               Brier      ECE  meanPred   actual
+   Logistic Regression                0.1864   0.0267    0.4947   0.4947
+   Support Vector Machine (SVM)       0.1865   0.0260    0.4947   0.4947
+   Decision Tree                      0.1840   0.0144    0.4940   0.4947
+   Random Forest                      0.1814   0.0110    0.4945   0.4947
+   XGBoost                            0.1814   0.0103    0.4945   0.4947
+   Ensemble Voting                    0.1815   0.0174    0.4945   0.4947
+------------------------------------------------------------
+
+ Operating points (screening policy: sensitivity >= 85%):
+   model                             thresh    sens    spec     PPV  missed/1k   was@0.5
+   Logistic Regression                0.357   0.850   0.533   0.640         74       161
+   Support Vector Machine (SVM)       0.357   0.850   0.535   0.641         74       161
+   Decision Tree                      0.316   0.853   0.523   0.637         72       162
+   Random Forest                      0.329   0.850   0.547   0.648         74       155
+   XGBoost                            0.326   0.850   0.545   0.647         74       154
+   Ensemble Voting                    0.340   0.850   0.545   0.647         74       156
+------------------------------------------------------------

@@ -1,0 +1,109 @@
+{
+    "generated_at": "2026-07-27 03:17:51",
+    "dataset": {
+        "path": "heart.csv",
+        "sha256": "c5bd02c62f9ffc6f33cd799d2864237d82a44a8ddb328f2727e0e4b21a27441e",
+        "rows_used_for_training": 68645,
+        "class_prevalence": 0.494734
+    },
+    "features": {
+        "order": [
+            "age",
+            "gender",
+            "height",
+            "weight",
+            "ap_hi",
+            "ap_lo",
+            "cholesterol",
+            "gluc",
+            "smoke",
+            "alco",
+            "active",
+            "bmi",
+            "pulse_pressure",
+            "age_group",
+            "high_risk_flag"
+        ],
+        "count": 15,
+        "encoding": "cholesterol/gluc are 0-indexed (0=normal, 1=above, 2=well above)"
+    },
+    "training": {
+        "class_weight_mode": "none (imbalance 1.02x <= 1.5x, data is balanced)",
+        "test_size": 0.2,
+        "random_state": 42,
+        "kfold": 5
+    },
+    "environment": {
+        "python": "3.14.6",
+        "scikit_learn": "1.9.0",
+        "pandas": "3.0.3",
+        "numpy": "2.4.6",
+        "xgboost_available": true
+    },
+    "artifacts": {
+        "benchmarks.json": {
+            "sha256": "b7bf206e5e60c7e7209ae1277f5191472db41d543616f59a8ad91b8613dadf5b",
+            "bytes": 8470
+        },
+        "config.json": {
+            "sha256": "33144a054aed3d8cd6a490c1e9b1959c9b114264ef86b393aa24cb1978b5d402",
+            "bytes": 130
+        },
+        "decision_tree.pkl": {
+            "sha256": "5f1c6ac93facb3c42f59cab04105a5a48adb1bcffe5b5d7a5f0524504fe8a191",
+            "bytes": 19092
+        },
+        "features.json": {
+            "sha256": "fee8eb0ecffce5f41756eac5bfb16a5bd0859aa3801605a147f9d32e3f0dc090",
+            "bytes": 161
+        },
+        "imputer_medians.json": {
+            "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+            "bytes": 2
+        },
+        "input_ranges.json": {
+            "sha256": "b1513ab3e93506eaceb0b5bbd56f1e744d9549eb002846fc162dc4e5c5312154",
+            "bytes": 2947
+        },
+        "logistic_regression.pkl": {
+            "sha256": "361928aa40c11e53ad9a5c0280e62604bbad9e4618a32b6a353b7d616499d7ac",
+            "bytes": 788
+        },
+        "preprocess_report.txt": {
+            "sha256": "f6c03bba689438b9f2ca8f4b7a4338f30335a1b99ee4553f1d14b3875dee7d3c",
+            "bytes": 8071
+        },
+        "random_forest.pkl": {
+            "sha256": "454fbd63bab7fcea0b8290ea9b8bd91bf595cdf7afe6e73d072c49911a0095c8",
+            "bytes": 29977617
+        },
+        "results.json": {
+            "sha256": "0f509e3d4dd62745d34b1e627c7ec2a92c43cd76b1c81eeaeda458d4f4a98c46",
+            "bytes": 475253
+        },
+        "risk_distribution.json": {
+            "sha256": "4b032678f944f2eebe04c0a9f19b98175d262fbefb8cd8fe2043b2341d1fc4f0",
+            "bytes": 26018
+        },
+        "scaler.pkl": {
+            "sha256": "ca3605c863646abd7b3d1b152dabeb7e3dcdea8088a7b93d08828ec2b2527150",
+            "bytes": 1032
+        },
+        "svm.pkl": {
+            "sha256": "c0e9bb7b96c63600e237384b7f10fc47aa4132b5bcf6f3d4dc95755ea10fc6c5",
+            "bytes": 1935
+        },
+        "thresholds.json": {
+            "sha256": "df6f2d48a8c50203d0cdf18bfc1de2649f6222d22c9cad2f481bb97fe8c50c60",
+            "bytes": 9710
+        },
+        "tuning_result.json": {
+            "sha256": "bf9829f05aa870cfa73ca5830d9b78686fd084e297ccbebabb9a5b4a2db9b387",
+            "bytes": 592
+        },
+        "xgboost.pkl": {
+            "sha256": "5e24ac6740b3d0980def7ace11217d2b452760f3491b7b0085c3a7e8d82c272c",
+            "bytes": 1077511
+        }
+    }
+}

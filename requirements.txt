@@ -1,0 +1,26 @@
+# HeartGuard FYP - Python dependencies
+# Install with:  pip install -r requirements.txt
+# Tested with Python 3.11-3.13
+#
+# NOTE: The trained model artifacts in models/ (*.pkl, scaler.pkl) were
+# serialized with scikit-learn 1.9.0. Loading them under an older version
+# raises InconsistentVersionWarning and may give invalid results, so the
+# scikit-learn floor below is set accordingly. If you retrain from scratch
+# (train_models.py), any recent version will work.
+
+# --- Web app framework ---
+streamlit>=1.30
+
+# --- Data handling ---
+pandas>=2.0
+numpy>=1.24
+
+# --- Machine learning ---
+scikit-learn>=1.9.0
+xgboost>=2.0
+
+# --- Explainable AI ---
+shap>=0.44
+
+# --- Plotting ---
+matplotlib>=3.7

@@ -1,0 +1,18 @@
+{
+    "n_trials": 40,
+    "search_seconds": 104.1,
+    "baseline_auc": 0.80005,
+    "tuned_auc": 0.802413,
+    "gain": 0.002364,
+    "best_params": {
+        "colsample_bytree": 0.7837,
+        "gamma": 1.00113,
+        "learning_rate": 0.01626,
+        "max_depth": 5,
+        "min_child_weight": 6,
+        "n_estimators": 508,
+        "reg_lambda": 17.05264,
+        "subsample": 0.93298
+    },
+    "conclusion": "Gain lies inside the bootstrap CI width of the AUC estimate, so it is not distinguishable from noise. Shipped hyperparameters retained for reproducibility."
+}

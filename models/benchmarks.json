@@ -1,0 +1,231 @@
+{
+    "generated_at": "2026-07-27 03:17:50",
+    "holdout_n": 13729,
+    "clinical_benchmark": {
+        "ml_model": {
+            "name": "HeartGuard ML ensemble",
+            "auc": 0.800038,
+            "auc_ci_low": 0.792419,
+            "auc_ci_high": 0.807123
+        },
+        "baselines": {
+            "BP staging rule (ACC/AHA 2017)": {
+                "auc": 0.72209,
+                "auc_ci_low": 0.713323,
+                "auc_ci_high": 0.729193,
+                "note": "Blood-pressure category alone - the simplest real triage rule.",
+                "ml_advantage": {
+                    "difference": 0.077949,
+                    "ci_low": 0.072254,
+                    "ci_high": 0.083268,
+                    "p_value": 0.0,
+                    "significant": true
+                }
+            },
+            "Framingham 2008 (proxy)": {
+                "auc": 0.705964,
+                "auc_ci_low": 0.69752,
+                "auc_ci_high": 0.714789,
+                "note": "Framingham general-CVD equation with substituted lipids: ordinal cholesterol mapped to band midpoints, HDL replaced by sex-specific population means. Both substitutions HANDICAP this comparator, so the margin shown against it is an upper bound.",
+                "ml_advantage": {
+                    "difference": 0.094075,
+                    "ci_low": 0.087212,
+                    "ci_high": 0.101196,
+                    "p_value": 0.0,
+                    "significant": true
+                }
+            },
+            "Clinical logistic regression": {
+                "auc": 0.791168,
+                "auc_ci_low": 0.783036,
+                "auc_ci_high": 0.797911,
+                "note": "Logistic regression on the seven classic risk factors (age, gender, ap_hi, cholesterol, gluc, smoke, bmi). THE FAIR COMPARISON - same inputs, same missing lipids, same outcome, so the difference isolates method.",
+                "ml_advantage": {
+                    "difference": 0.00887,
+                    "ci_low": 0.007317,
+                    "ci_high": 0.010475,
+                    "p_value": 0.0,
+                    "significant": true
+                }
+            }
+        }
+    },
+    "incremental_value": [
+        {
+            "step": "Demographics only",
+            "n_features": 3,
+            "features": [
+                "age",
+                "gender",
+                "age_group"
+            ],
+            "auc": 0.642887,
+            "auc_ci_low": 0.633153,
+            "auc_ci_high": 0.650856,
+            "delta_auc": null
+        },
+        {
+            "step": "+ Blood pressure",
+            "n_features": 6,
+            "features": [
+                "age",
+                "gender",
+                "age_group",
+                "ap_hi",
+                "ap_lo",
+                "pulse_pressure"
+            ],
+            "auc": 0.785115,
+            "auc_ci_low": 0.777493,
+            "auc_ci_high": 0.792399,
+            "delta_auc": 0.142228,
+            "paired_test_vs_previous": {
+                "difference": 0.142228,
+                "ci_low": 0.13381,
+                "ci_high": 0.150577,
+                "p_value": 0.0,
+                "significant": true
+            }
+        },
+        {
+            "step": "+ Body metrics",
+            "n_features": 9,
+            "features": [
+                "age",
+                "gender",
+                "age_group",
+                "ap_hi",
+                "ap_lo",
+                "pulse_pressure",
+                "height",
+                "weight",
+                "bmi"
+            ],
+            "auc": 0.787342,
+            "auc_ci_low": 0.778972,
+            "auc_ci_high": 0.793825,
+            "delta_auc": 0.002227,
+            "paired_test_vs_previous": {
+                "difference": 0.002227,
+                "ci_low": -4e-05,
+                "ci_high": 0.004325,
+                "p_value": 0.053333,
+                "significant": false
+            }
+        },
+        {
+            "step": "+ Cholesterol & glucose",
+            "n_features": 12,
+            "features": [
+                "age",
+                "gender",
+                "age_group",
+                "ap_hi",
+                "ap_lo",
+                "pulse_pressure",
+                "height",
+                "weight",
+                "bmi",
+                "cholesterol",
+                "gluc",
+                "high_risk_flag"
+            ],
+            "auc": 0.798475,
+            "auc_ci_low": 0.790791,
+            "auc_ci_high": 0.805901,
+            "delta_auc": 0.011132,
+            "paired_test_vs_previous": {
+                "difference": 0.011132,
+                "ci_low": 0.008656,
+                "ci_high": 0.013741,
+                "p_value": 0.0,
+                "significant": true
+            }
+        },
+        {
+            "step": "+ Lifestyle (all features)",
+            "n_features": 15,
+            "features": [
+                "age",
+                "gender",
+                "height",
+                "weight",
+                "ap_hi",
+                "ap_lo",
+                "cholesterol",
+                "gluc",
+                "smoke",
+                "alco",
+                "active",
+                "bmi",
+                "pulse_pressure",
+                "age_group",
+                "high_risk_flag"
+            ],
+            "auc": 0.80005,
+            "auc_ci_low": 0.792332,
+            "auc_ci_high": 0.807193,
+            "delta_auc": 0.001575,
+            "paired_test_vs_previous": {
+                "difference": 0.001575,
+                "ci_low": 0.000412,
+                "ci_high": 0.002843,
+                "p_value": 0.006667,
+                "significant": true
+            }
+        }
+    ],
+    "interaction_test": {
+        "tree": {
+            "base": 0.80005,
+            "with_interactions": 0.799725,
+            "delta": -0.000325
+        },
+        "linear": {
+            "base": 0.791984,
+            "with_interactions": 0.796316,
+            "delta": 0.004332
+        },
+        "interaction_terms": [
+            "age_x_sbp",
+            "bmi_x_sbp",
+            "chol_x_sbp",
+            "age_x_chol",
+            "metabolic_burden",
+            "map_mmhg"
+        ]
+    },
+    "hyperparameter_search": {
+        "n_trials": 40,
+        "search_seconds": 104.1,
+        "baseline_auc": 0.80005,
+        "tuned_auc": 0.802413,
+        "gain": 0.002364,
+        "best_params": {
+            "colsample_bytree": 0.7837,
+            "gamma": 1.00113,
+            "learning_rate": 0.01626,
+            "max_depth": 5,
+            "min_child_weight": 6,
+            "n_estimators": 508,
+            "reg_lambda": 17.05264,
+            "subsample": 0.93298
+        },
+        "conclusion": "Gain lies inside the bootstrap CI width of the AUC estimate, so it is not distinguishable from noise. Shipped hyperparameters retained for reproducibility."
+    },
+    "interpretation": {
+        "headline": "The ML ensemble significantly outperforms every clinical comparator, but gains only ~0.009 AUC over conventional logistic regression on the same risk factors.",
+        "ceiling": "Blood pressure accounts for the large majority of achievable discrimination. Hyperparameter search adds +0.0024 and interaction terms -0.0003 on trees, both inside the noise floor. Performance is bounded by the available features, not by the modelling method.",
+        "what_would_help": [
+            "HDL and LDL cholesterol as continuous values (currently a 3-level ordinal)",
+            "Confirmed diabetes status (currently proxied by ordinal glucose)",
+            "Family history of premature cardiovascular disease",
+            "Antihypertensive / lipid-lowering medication status",
+            "Objective activity measurement (self-reported activity adds +0.002)"
+        ],
+        "caveats": [
+            "The Framingham comparator is a proxy: ordinal cholesterol mapped to band midpoints, HDL replaced by sex means. Both handicap it, so the margin against it is an upper bound.",
+            "Framingham and SCORE2 estimate 10-year INCIDENT risk; this dataset's target is PREVALENT disease at examination. Ranking comparisons remain valid, absolute risk values do not transfer."
+        ]
+    }
+}
