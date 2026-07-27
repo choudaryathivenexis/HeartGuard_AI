@@ -1081,37 +1081,37 @@ def _legacy_block() -> str:
     """
     return f"""
 /* ── legacy shim: 8 classes, still referenced by the admin pages ───── */
-.panel {{{{
+.panel {{
   background: var(--hg-surface);
   border: 1px solid var(--hg-border);
   border-radius: var(--hg-radius-lg);
   padding: var(--hg-space-6);
   margin-bottom: var(--hg-space-5);
-}}}}
-.alert-info, .alert-warning {{{{
+}}
+.alert-info, .alert-warning {{
   border-radius: var(--hg-radius-md);
   padding: var(--hg-space-4) var(--hg-space-5);
   font-size: 13px;
   line-height: 1.6;
   margin: var(--hg-space-3) 0;
   border-left: 3px solid;
-}}}}
-.alert-info {{{{
+}}
+.alert-info {{
   background: var(--hg-info-surface);
   border-color: var(--hg-info-border);
   border-left-color: var(--hg-text-muted);
   color: var(--hg-info-text);
-}}}}
-.alert-warning {{{{
+}}
+.alert-warning {{
   background: var(--hg-warning-surface);
   border-color: var(--hg-warning-border);
   border-left-color: var(--hg-warning-text);
   color: var(--hg-warning-text);
-}}}}
-.role-badge {{{{
+}}
+.role-badge {{
   display: inline-block;
   font-size: 11px;
-  font-weight: {{T.WEIGHT['semibold']}};
+  font-weight: {T.WEIGHT['semibold']};
   text-transform: uppercase;
   letter-spacing: var(--hg-track-eyebrow);
   padding: 2px var(--hg-space-3);
@@ -1119,12 +1119,12 @@ def _legacy_block() -> str:
   background: var(--hg-primary-tint);
   color: var(--hg-primary);
   border: 1px solid var(--hg-primary-border);
-}}}}
-.rb-doctor, .rb-admin, .rb-superadmin {{{{
+}}
+.rb-doctor, .rb-admin, .rb-superadmin {{
   background: var(--hg-primary-tint);
   color: var(--hg-primary);
   border-color: var(--hg-primary-border);
-}}}}
+}}
 """
 
 def _login_block() -> str:
@@ -1423,8 +1423,10 @@ def _tail_block() -> str:
     page-break-inside: avoid;
   }
   .hg-alert--extrapolation { border: 2px solid #8C1D33 !important; }
-  /* Shadows print as grey mud. */
-  * { box-shadow: none !important; }
+  /* Shadows print as grey mud. Written `html *` rather than `* ` because a line
+     beginning with an asterisk and a space is a Markdown list item, and this sheet
+     must stay safe to hand to a Markdown parser. */
+  html * { box-shadow: none !important; }
   a[href]::after { content: ""; }   /* no URL footnotes in a clinical record */
   @page { margin: 14mm; }
 }
@@ -1452,9 +1454,19 @@ def _minify(css: str) -> str:
     """
     out = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
     out = re.sub(r"\n[ \t]*\n+", "\n", out)
+    # STRIP LEADING INDENTATION. This is not cosmetic — it is a correctness fix.
+    # Streamlit renders `st.markdown` content through a Markdown parser before the HTML
+    # reaches the page, and Markdown turns any line indented four or more spaces into a
+    # code block. 223 lines of this stylesheet were indented that far, so the parser cut
+    # out of the <style> element and printed the rest of the CSS onto the page as
+    # visible text. `inject()` now uses st.html, which does not Markdown-process at all;
+    # removing the indentation as well means the payload is safe even if some future
+    # call site sends it through markdown again. CSS does not need the whitespace.
+    out = "\n".join(l.lstrip() for l in out.split("\n") if l.strip())
     balanced = out.count("{") == out.count("}") == css.count("{")
     uris_intact = out.count("data:image") == css.count("data:image")
-    return out if (balanced and uris_intact) else css
+    no_indent = not any(l[:1] in (" ", "\t") for l in out.split("\n"))
+    return out if (balanced and uris_intact and no_indent) else css
 
 
 @st.cache_resource(show_spinner=False)
@@ -1520,14 +1532,33 @@ def _theme_override(theme: str) -> str:
 
 
 def inject() -> None:
-    """Inject the stylesheet. Call once, immediately after st.set_page_config."""
-    st.markdown(
+    """
+    Inject the stylesheet. Call once, immediately after st.set_page_config.
+
+    USES st.html, NOT st.markdown — and this is a bug fix, not a preference.
+
+    `st.markdown` runs its argument through a Markdown parser before the HTML reaches
+    the page. Markdown turns any line indented four or more spaces into a code block, so
+    the parser cut out of the <style> element partway down the sheet and printed the
+    remaining CSS onto the login page as thousands of lines of visible text. It looked
+    like the app was dumping errors; it was the stylesheet being rendered as prose.
+
+    `st.html` exists for exactly this and does no Markdown processing. The <link> tags
+    move with it. `_minify` also strips the indentation now, so the payload is safe even
+    if some future call site sends it through markdown again — two independent defences,
+    because this failure is silent in every automated check I have: AppTest sees the
+    markdown element and reports success either way.
+    """
+    head = (
         "<link rel='preconnect' href='https://fonts.googleapis.com'>"
         "<link rel='preconnect' href='https://fonts.gstatic.com' crossorigin>"
         f"<style>{stylesheet()}</style>"
-        f"<style>{_theme_override(active_theme())}</style>",
-        unsafe_allow_html=True,
+        f"<style>{_theme_override(active_theme())}</style>"
     )
+    if hasattr(st, "html"):
+        st.html(head)
+    else:                                   # pragma: no cover - older Streamlit
+        st.markdown(head, unsafe_allow_html=True)
 
 
 def size_kb() -> float:

@@ -2433,3 +2433,110 @@ Recorded plainly rather than left implicit:
   authentication logic that §1.1 puts out of bounds.
 - **The risk ramp cannot be made colour-blind-safe or luminance-monotonic** inside the
   Brand Six. Both are measured, recorded, and mitigated by redundant encoding.
+
+---
+
+# RUN 15 — The stylesheet was rendering as text (2026-07-28)
+
+Reported from the browser on first load: thousands of lines of CSS printed onto the
+sign-in page above the form. It looked like the application was dumping errors. It was
+not — it was printing its own stylesheet as prose.
+
+Nothing was wrong with the app's logic. Every automated gate had been green.
+
+## 15.1 — Two causes, both introduced by me
+
+**1. `st.markdown` Markdown-processes its argument before the HTML reaches the page.**
+Markdown turns any line indented four or more spaces into a code block. 223 lines of the
+stylesheet were indented that far, so the parser cut out of the `<style>` element partway
+down the sheet and emitted everything after it as visible text.
+
+The indentation had been there since Phase 1 and was harmless while blank lines separated
+the blocks. Phase 6's `_minify()` removed those blank lines to reclaim 12 KB, which
+changed how the Markdown parser grouped what followed. The regression was introduced four
+phases before it became visible.
+
+**2. Phase 10's `_legacy_block()` rewrite shipped invalid CSS.** It was written through a
+shell heredoc with FOUR braces (`{{{{`), so the f-string collapsed them to `{{` in the
+output rather than `{`. Twelve rules shipped as `.panel {{ … }}`, and one declaration
+shipped as the literal text `font-weight: {T.WEIGHT['semibold']};`.
+
+## 15.2 — Why every check I had was blind to it
+
+This is the part worth keeping.
+
+| Check | Why it passed anyway |
+|---|---|
+| 27-path AppTest | Sees a markdown element and reports success whether its content renders as a stylesheet or as prose. **It does not render CSS at all.** |
+| Brace balance | `{{ … }}` balances perfectly. **Balance is not validity.** |
+| "Key selectors present" | `.panel {{` still contains `.panel`. |
+| CSS size budget | An invalid sheet weighs the same as a valid one. |
+| `_minify()`'s own guard | Checked balance and data-URI count — both of which survived. |
+
+Every one asked whether a string was *present*. None asked whether a browser could
+*use* it. That distinction is the same lesson as Run 8's — a test that checks what the
+user sees is not a test that the system recorded it — pointed at the other end of the
+pipeline.
+
+## 15.3 — The fixes
+
+- **`inject()` now uses `st.html`**, which exists for raw HTML and does no Markdown
+  processing. A `st.markdown` fallback remains for older Streamlit.
+- **`_minify()` strips leading indentation** from every line. Not cosmetic — it makes the
+  payload safe even if a future call site sends it through Markdown again. CSS does not
+  need the whitespace, and it saved a further 2 KB.
+- **The 12 over-escaped brace lines and the one over-escaped interpolation are fixed.**
+- **`* { box-shadow: none }` became `html * { … }`** in the print block. A line beginning
+  with an asterisk and a space *is* a Markdown list item; the sheet must stay safe to
+  hand to a parser even though it no longer is.
+
+## 15.4 — `tests/test_styles.py`, the suite that should have existed
+
+34 assertions targeting the **delivery mechanism and payload validity**, which is where
+the failure actually lived:
+
+- no line begins with whitespace; no blank lines; no line would parse as a Markdown
+  block (list marker, fence, heading, blockquote, ordered item)
+- no literal doubled braces; no unresolved f-string placeholder; braces balance; every
+  declaration block contains at least one `prop: value`; no malformed selectors
+- **each of the 11 blocks is checked individually**, not just the assembled sheet —
+  both Phase 10 bugs lived in one block, and a whole-sheet assertion would have meant
+  grepping 45 KB to find them
+- `inject()` uses `st.html`, and after a real run **no markdown element carries the
+  stylesheet** — asserted on the signed-in page and the sign-in page separately, since
+  the sign-in page is where the failure was visible
+
+Two of those assertions found further real problems on their first run: the unresolved
+`{T.WEIGHT['semibold']}` placeholder, and the `* ` selector.
+
+One of them was also wrong on its first run and worth recording: it rejected any line
+starting with `-` or `*`, which flags `--hg-border: #D8DDE4;` and `* { … }` — both
+ordinary CSS. A Markdown list marker is the character *followed by a space*. It reported
+a failure with an empty detail string, which is how I noticed the test was wrong rather
+than the stylesheet.
+
+## 15.5 — Gate
+
+```
+27-path AppTest         27/27 routed, 0 exceptions
+py_compile              clean on 17 modules
+pyflakes                no new warnings vs baseline
+test_tokens             0 failures     test_login             0 failures
+test_brand              0 failures     test_diagnosis         0 failures
+test_rail               0 failures     test_charts            0 failures
+test_components         0 failures     test_performance_ia    0 failures
+test_a11y               0 failures     test_styles            0 failures  (new, 34)
+live server             starts clean, /_stcore/health 200, 0 errors in log
+CSS                     45.0 KB / 60 KB   0 doubled braces   0 indented lines
+```
+
+## 15.6 — What this changes about the earlier claim
+
+I said after Phase 10 that I could not claim "no UI errors" because no browser
+automation exists and `AppTest` does not render CSS. This bug is exactly that gap
+realised: the app was clean by every measure I had and visibly broken on first load.
+
+The new suite closes the specific hole — a stylesheet that cannot reach the browser
+intact is now a test failure rather than a surprise. It does **not** close the general
+one. Layout, spacing, overlap and anything else that depends on how a browser lays out
+correct CSS remain unverified, and the only way to check them is to look.
