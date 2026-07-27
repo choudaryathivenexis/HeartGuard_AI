@@ -13,6 +13,8 @@ import clinical_ui as cu
 from ui import styles as ui_styles
 from ui import brand as ui_brand
 from ui import components as uic
+from ui import format as fmt
+from ui import login as ui_login
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -411,92 +413,173 @@ def section_header(icon, title, subtitle=""):
 # ══════════════════════════════════════════════════════════════════
 # LOGIN / REGISTER PAGE
 # ══════════════════════════════════════════════════════════════════
+def login_facts():
+    """
+    The record count and trust markers for the sign-in panel (§7.2).
+
+    Derived from the shipped artifacts, never written into the copy: a hard-coded
+    "AUC 0.8000" on the sign-in screen becomes a false claim the first time anyone
+    retrains. A missing artifact drops its marker rather than substituting a
+    plausible-looking number — the panel simply carries fewer lines.
+
+    The prediction path defaults to the ensemble, so the ensemble is what the marker
+    reports. Quoting the best single model here while the app scores with a different
+    one would make the headline figure describe something the user never touches.
+    """
+    rows = int(cu.model_version_info().get("rows", 0) or 0)
+    markers = []
+
+    res = load_results(include_virtual=True)
+    m = res.get("Ensemble Voting") or {}
+    if "auc" in m:
+        auc_txt = f"AUC {fmt.auc(m['auc'])}"
+        if m.get("auc_ci_low") is not None and m.get("auc_ci_high") is not None:
+            auc_txt += " " + fmt.interval(m["auc_ci_low"], m["auc_ci_high"], fmt.auc)
+        markers.append(("Discrimination", auc_txt))
+
+    th = load_thresholds()
+    pol, strat = th.get("policy", {}), th.get("stratification", {})
+    if pol.get("target_sensitivity") and strat.get("variable"):
+        markers.append(("Operating point",
+                        f"Sensitivity {pol['target_sensitivity']:.2f} · "
+                        f"{strat['variable']}-stratified"))
+
+    if m.get("mean_predicted") is not None and m.get("test_prevalence") is not None:
+        markers.append(("Calibration gap",
+                        fmt.metric3(abs(m["mean_predicted"] - m["test_prevalence"]))))
+
+    return rows, markers
+
+
 def page_login():
-    col1, col2, col3 = st.columns([1, 1.4, 1])
-    with col2:
-        st.markdown("""
-        <div class="login-wrap">
-        <div class="login-logo">H</div>
-        <div class="login-brand">HeartGuard AI</div>
-        <div class="login-tag">Cardiovascular Risk Intelligence Portal</div>
-        """, unsafe_allow_html=True)
+    """
+    §7.2 — full-bleed 44/56 split.
 
-        tab_login, tab_reg = st.tabs(["Sign In", "Register"])
+    The authentication contract is untouched: the same validate_login call, the same
+    three statuses, the same log_activity on success, the same registration_allowed
+    gate (BUG-17) and the same Doctor-only role lock (BUG-09). What changed is where
+    failures are reported. They used to be st.error banners above the form; §7.2 asks
+    for validation beneath the field it concerns, which needs the message to survive
+    into the next run — hence the two session_state error dicts. They are cleared on
+    every submit so a corrected field's message disappears with it.
+    """
+    rows, markers = login_facts()
 
-        with tab_login:
-            st.markdown("""
-            <div style="display:flex;gap:10px;margin-bottom:18px;flex-wrap:wrap;">
-            <div style="flex:1;background:#fff5f5;border:1px solid #fca5a5;border-radius:12px;padding:12px;text-align:center;font-size:.83em;">
-            <div style="color:#dc2626;font-weight:700;margin-top:2px;">Doctor</div>
-            <div style="color:#9ca3af;font-size:.85em;">doctor / doctor123</div>
-            </div>
-            <div style="flex:1;background:#fff5f5;border:1px solid #fca5a5;border-radius:12px;padding:12px;text-align:center;font-size:.83em;">
-            <div style="color:#b91c1c;font-weight:700;margin-top:2px;">Admin</div>
-            <div style="color:#9ca3af;font-size:.85em;">admin / admin123</div>
-            </div>
-            <div style="flex:1;background:#fff5f5;border:1px solid #fca5a5;border-radius:12px;padding:12px;text-align:center;font-size:.83em;">
-            <div style="color:#991b1b;font-weight:700;margin-top:2px;">SuperAdmin</div>
-            <div style="color:#9ca3af;font-size:.85em;">superadmin / superadmin123</div>
-            </div>
-            </div>
-            """, unsafe_allow_html=True)
+    with ui_login.split() as (left, right):
+        with left:
+            ui_login.brand_panel(
+                ui_login.STATEMENT.format(n=fmt.count(rows) if rows else "68,645"),
+                markers)
 
-            with st.form("login_form"):
-                username = st.text_input("Username", placeholder="Enter username")
-                password = st.text_input("Password", type="password", placeholder="Enter password")
-                submitted = st.form_submit_button("Sign In", use_container_width=True)
-                if submitted:
-                    if username and password:
-                        user, status = auth_db.validate_login(username.strip(), password)
-                        if status == "ok":
-                            st.session_state.user = user
-                            auth_db.log_activity(user['id'], username, "Login",
-                                                 f"Authenticated as {user['role']}.")
-                            st.rerun()
-                        elif status == "banned":
-                            st.error("Your account has been suspended. Contact the administrator.")
-                        else:
-                            st.error("Invalid username or password.")
+        with right:
+            mode = "Sign in"
+            with st.container(key="login-seg"):
+                mode = st.segmented_control(
+                    "Mode", ["Sign in", "Register"], default="Sign in",
+                    key="login_mode_seg", label_visibility="collapsed") or "Sign in"
+
+            if mode == "Sign in":
+                _login_form()
+            else:
+                _register_form()
+
+
+def _login_form():
+    err = st.session_state.get("login_err", {})
+    with ui_login.card("Sign in", "Access the cardiovascular screening console."):
+        with st.form("login_form"):
+            username = st.text_input("Username", placeholder="Your username")
+            ui_login.inline_error(err.get("username"))
+            password = st.text_input("Password", type="password",
+                                     placeholder="Your password")
+            ui_login.inline_error(err.get("password"))
+            ui_login.inline_error(err.get("form"))
+            submitted = st.form_submit_button("Sign in", type="primary",
+                                              use_container_width=True)
+            if submitted:
+                e = {}
+                if not username:
+                    e["username"] = "Enter your username."
+                if not password:
+                    e["password"] = "Enter your password."
+                if not e:
+                    user, status = auth_db.validate_login(username.strip(), password)
+                    if status == "ok":
+                        st.session_state.user = user
+                        st.session_state.login_err = {}
+                        auth_db.log_activity(user['id'], username, "Login",
+                                             f"Authenticated as {user['role']}.")
+                        st.rerun()
+                    elif status == "banned":
+                        e["form"] = ("This account is suspended. Contact the "
+                                     "administrator to restore access.")
                     else:
-                        st.warning("Please fill in all fields.")
+                        # Deliberately does not say which of the two was wrong: naming
+                        # the field turns the form into a username oracle.
+                        e["form"] = "That username and password do not match an account."
+                st.session_state.login_err = e
+                st.rerun()
+        ui_login.seed_hint()
 
-        with tab_reg:
-            # FIXED (BUG-17): the `allow_registration` system setting is now enforced.
-            # It was previously saved and displayed but read by no one.
-            if not registration_allowed():
-                st.markdown('<div class="alert-warning">Public registration is currently '
-                            'disabled by the administrator.</div>', unsafe_allow_html=True)
-                st.stop()
-            with st.form("reg_form"):
-                r_user = st.text_input("Username", placeholder="Choose a username")
-                r_full = st.text_input("Full Name", placeholder="e.g. Dr. Ahmed Khan")
-                r_email = st.text_input("Email", placeholder="your@email.com")
-                r_spec = st.text_input("Specialisation", placeholder="e.g. Cardiologist")
-                # FIXED (BUG-09): self-service registration is locked to the Doctor
-                # role. The dropdown previously offered SuperAdmin to anonymous
-                # visitors, and was already exploited — two accounts in the live
-                # database had elevated themselves this way. Elevation now happens
-                # only through Role & Permission Management, by an existing SuperAdmin.
-                r_role = "Doctor"
-                st.caption("New accounts are created with the **Doctor** role. "
-                           "Contact an administrator if you need elevated access.")
-                r_pass = st.text_input("Password", type="password", placeholder="Min 6 characters")
-                r_sub = st.form_submit_button("Create Account", use_container_width=True)
-                if r_sub:
-                    if all([r_user, r_full, r_email, r_pass]):
-                        if len(r_pass) < 6:
-                            st.warning("Password must be at least 6 characters.")
-                        else:
-                            uid, err = auth_db.register_user(
-                                r_user.strip(), r_pass, r_role, r_full, r_email, r_spec)
-                            if uid:
-                                st.success(f"Account created! Sign in with: {r_user}")
-                            else:
-                                st.error("Username already taken. Choose another.")
+
+def _register_form():
+    # FIXED (BUG-17): the `allow_registration` system setting is now enforced.
+    # It was previously saved and displayed but read by no one.
+    if not registration_allowed():
+        with ui_login.card("Register"):
+            uic.alert("warning", "Registration is closed",
+                      "An administrator has disabled public sign-up. Ask them to "
+                      "create an account for you.")
+        return
+
+    err = st.session_state.get("reg_err", {})
+    ok = st.session_state.pop("reg_ok", None)
+    with ui_login.card("Create an account",
+                       "New accounts are issued the Doctor role."):
+        if ok:
+            uic.alert("success", "Account created",
+                      f"Sign in as {fmt.esc(ok)} using the password you chose.")
+        with st.form("reg_form"):
+            r_user = st.text_input("Username", placeholder="Choose a username")
+            ui_login.inline_error(err.get("username"))
+            r_full = st.text_input("Full name", placeholder="e.g. Dr. Ahmed Khan")
+            ui_login.inline_error(err.get("fullname"))
+            r_email = st.text_input("Email", placeholder="you@hospital.org")
+            ui_login.inline_error(err.get("email"))
+            r_spec = st.text_input("Specialisation", placeholder="e.g. Cardiologist")
+            r_pass = st.text_input("Password", type="password",
+                                   placeholder="At least 6 characters")
+            ui_login.inline_error(err.get("password"))
+            # FIXED (BUG-09): self-service registration is locked to the Doctor
+            # role. The dropdown previously offered SuperAdmin to anonymous
+            # visitors, and was already exploited — two accounts in the live
+            # database had elevated themselves this way. Elevation now happens
+            # only through Role & Permission Management, by an existing SuperAdmin.
+            r_role = "Doctor"
+            r_sub = st.form_submit_button("Create account", type="primary",
+                                          use_container_width=True)
+            if r_sub:
+                e = {}
+                if not r_user:
+                    e["username"] = "Choose a username."
+                if not r_full:
+                    e["fullname"] = "Enter your full name."
+                if not r_email:
+                    e["email"] = "Enter an email address."
+                if not r_pass:
+                    e["password"] = "Choose a password."
+                elif len(r_pass) < 6:
+                    e["password"] = "Use at least 6 characters."
+                if not e:
+                    uid, _err = auth_db.register_user(
+                        r_user.strip(), r_pass, r_role, r_full, r_email, r_spec)
+                    if uid:
+                        st.session_state.reg_ok = r_user.strip()
                     else:
-                        st.warning("Please fill all required fields.")
-
-        st.markdown("</div>", unsafe_allow_html=True)
+                        e["username"] = "That username is taken. Choose another."
+                st.session_state.reg_err = e
+                st.rerun()
+        st.caption("Contact an administrator if you need elevated access.")
 
 
 # ══════════════════════════════════════════════════════════════════

@@ -74,6 +74,47 @@ def _connect():
     return conn
 
 
+# ─────────────────────────────────────────────
+# First-run seed accounts
+# ─────────────────────────────────────────────
+# (username, password, role, fullname, email, specialisation)
+#
+# These are inserted ONCE, when an empty database is first created. Redesign §7.2
+# required them off the sign-in screen: the old login page printed all three, in
+# plaintext, to every anonymous visitor. A demo convenience that ships as a published
+# credential list is not a demo convenience, it is three unauthenticated accounts —
+# one of them SuperAdmin.
+#
+# They are still discoverable, but only by whoever started the process: they are
+# printed to the server console at the moment of creation, and the login page carries
+# a caption saying so. Someone with the terminal already controls the machine; someone
+# with the URL does not.
+SEED_CREDENTIALS = [
+    ("doctor",     "doctor123",     "Doctor",
+     "Dr. John Smith",       "jsmith@heartguard.ai",   "Cardiologist"),
+    ("admin",      "admin123",      "Admin",
+     "Admin User",           "admin@heartguard.ai",    "System Admin"),
+    ("superadmin", "superadmin123", "SuperAdmin",
+     "Dr. Sarah Jenkins MD", "sjenkins@heartguard.ai", "Cardiologist"),
+]
+
+
+def _announce_seed_credentials(creds):
+    """
+    Print the seeded accounts to stdout, once, at database creation.
+
+    Written to the console rather than the log table on purpose: system_logs is
+    readable through Activity Logs by any Admin, which would put the plaintext
+    passwords back in the browser by a longer route.
+    """
+    line = "─" * 66
+    print(f"\n{line}\n  HeartGuard AI — database created, seed accounts:\n")
+    for username, password, role, *_ in creds:
+        print(f"    {role:<11}  {username:<11}  {password}")
+    print("\n  Change these before any deployment. They are printed once and\n"
+          f"  are not shown in the application.\n{line}\n", flush=True)
+
+
 def init_db():
     conn = _connect()
     c = conn.cursor()
@@ -185,12 +226,8 @@ def init_db():
     c.execute("SELECT COUNT(*) FROM users")
     if c.fetchone()[0] == 0:
         defaults = [
-            ("doctor",   hash_password("doctor123"),   "Doctor",
-             "Dr. John Smith",       "jsmith@heartguard.ai",    "Cardiologist"),
-            ("admin",    hash_password("admin123"),    "Admin",
-             "Admin User",           "admin@heartguard.ai",     "System Admin"),
-            ("superadmin", hash_password("superadmin123"), "SuperAdmin",
-             "Dr. Sarah Jenkins MD", "sjenkins@heartguard.ai",  "Cardiologist"),
+            (u, hash_password(p), role, full, mail, spec)
+            for u, p, role, full, mail, spec in SEED_CREDENTIALS
         ]
         c.executemany("""
             INSERT INTO users (username,password_hash,role,fullname,email,specialisation)
@@ -200,6 +237,7 @@ def init_db():
             INSERT INTO system_logs (user_id,username,action,details)
             VALUES (1,'system','DB Initialised','Default accounts seeded successfully.')
         """)
+        _announce_seed_credentials(SEED_CREDENTIALS)
     conn.commit()
     conn.close()
 

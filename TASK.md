@@ -1446,3 +1446,195 @@ button, Patient Records / Outcome Review / Batch Scoring pages, model card, Tab 
 All engines built and tested; UI wiring outstanding. Plus `max_predictions_per_day`
 and `session_timeout_min` still unenforced, external validation needs a second cohort,
 and encryption at rest needs a key-management decision.
+
+---
+
+# RUN 9 — Frontend redesign, Phases 0–5 (2026-07-27)
+
+A ten-phase rebuild of the presentation layer against the "Instrument Panel" design
+brief, under one hard contract: **zero behavioural change**. No clinical or statistical
+logic moves. Threshold resolution order, risk-band classification, the applicability
+check and its `extrapolated` persistence, peer-percentile suppression, row-level data
+scoping and every `log_activity()` call site are all preserved exactly, and a 27-path
+AppTest gate re-runs after every phase to prove it.
+
+`requirements.txt` does not grow across any of the ten phases.
+
+## 9.0 — Phase 0: recon and baseline (`2777857`)
+
+**Why.** A redesign that cannot prove it changed nothing is a rewrite. Before touching
+anything I captured the structural output of all 27 page×role paths to
+`baseline/widget_tree.json`, so every later phase can be diffed against what the
+application produced before it.
+
+**How.** Inventoried the surface: 116 `unsafe_allow_html` blocks, 24 legacy CSS classes
+with 111 usages, 39 matplotlib call sites carrying 85 hard-coded hexes and 24 `rgba()`
+strings, 157 lines of inline CSS in `app.py`.
+
+**One gate item cannot be satisfied and is substituted, not skipped.** The brief asks
+for screenshots of every affected page in both themes. No browser automation is
+available — playwright, selenium, html2image and imgkit are all absent — and the brief
+forbids new dependencies. Visual verification is therefore done by (a) structural
+comparison against `baseline/widget_tree.json` and (b) targeted matplotlib renders of
+any geometry whose correctness is visual. This is weaker than a screenshot and is
+recorded as such.
+
+## 9.1 — Phase 1: the token layer (`a5f8f31`, `04e00c9`)
+
+**Why.** 85 hard-coded hexes across 39 chart call sites is not a theming problem, it is
+a *correctness* problem — BUG-01/02 were CSS `rgba()` strings reaching matplotlib and
+crashing the entire Model Performance page. The fix has to be structural.
+
+**How.** `ui/tokens.py` (541 lines) is the single source of truth: six brand colours,
+colour maths, risk ramp, semantic and hazard families, dark counterparts. The key
+decision is that `CSS` and `MPL` are **separate dicts**. Matplotlib rejects `rgba()`;
+CSS wants it. Keeping one dict and hoping call sites choose correctly is how BUG-01
+happened. A test asserts every value in `MPL` is a 6-digit hex, which makes the class
+of bug structurally impossible rather than merely fixed.
+
+Also in Phase 1: `ui/format.py` (decimal discipline — AUC always 4dp, percentages 1dp,
+en-dash intervals), a 262-key native theme in `.streamlit/config.toml`, and
+`ui/styles.py` as a single cached stylesheet with a fixed cascade order. Zero
+`.st-emotion-cache-*` selectors — all scoping goes through `st.container(key=…)` →
+`.st-key-<key>`, which is the officially supported hook and survives Streamlit
+upgrades.
+
+Phase 1b built the **Caliper Mark** and a 29-icon set. The icons are stored as
+*structured primitives* with two renderers (SVG and matplotlib) because no SVG
+rasteriser is available and the favicon has to be generated with Pillow. Building both
+renderers exposed a real bug: they disagreed on arc direction (`cy − r·sin θ` vs
+`cy + r·sin θ`), mirroring every arc, so shoulders rendered as smiles. Unified on
+screen-space `+sin`.
+
+**Three measured corrections to the brief**, each recorded rather than quietly ignored:
+the risk ramp is not luminance-monotonic and cannot be made so while staying in the
+Brand Six; "UI borders ≥3:1" is unachievable with a hairline; and the derivation
+tolerance needed empirical calibration to 45 (family members measured 27–37, foreign
+hues 71–123).
+
+## 9.2 — Phase 2: the shell (`60ba5f5`)
+
+**Why.** A flat 17-item `st.radio` is not navigation. It cannot carry an icon, cannot
+group, and cannot take a per-item active treatment.
+
+**How.** Replaced with one button per item inside a keyed container, grouped under
+eyebrow labels, with selection held in `st.session_state.nav_page`. The routing
+contract is unchanged — `render_sidebar` still returns the same page label the router
+already matched on, so no route moved.
+
+## 9.3 — Phase 3: the Reference Rail (`e939604`)
+
+**Why.** The design thesis is that a reading and its tolerance are always shown
+together. The rail is the element that makes that literal.
+
+**How.** `ui/rail.py` is a pure geometry layer with five renderers. The important
+function is `envelope_geometry()`, which **expands the domain** when a value falls
+outside the training envelope — an out-of-range value must still be visible and visibly
+outside, not clamped to the edge where it would look merely extreme. 71 geometry
+assertions.
+
+## 9.4 — Phase 4: the component library (`0b495e7`)
+
+**Why.** Phases 5–10 all render clinical output. Building the vocabulary once, with the
+clinical rules asserted rather than documented, is what stops those rules drifting
+across six pages.
+
+**How.** `stat`, `stat_grid`, `alert` (five severities including `extrapolation`),
+`risk_verdict`, `operating_point`, `reliability_panel`, `data_table`, `static_table`.
+Bands and thresholds are **passed in, never recomputed**, so an embedded rail cannot
+disagree with the verdict the app already decided. The tests assert the forbidden
+clinical vocabulary appears nowhere, that `extrapolation` takes no risk colour, and
+that reliability renders as text and not colour alone.
+
+**A CSS budget problem, fixed at the cause.** The stylesheet reached 56.3 KB of a 60 KB
+budget with six phases left. Measurement showed ~15 KB was nav icon data URIs emitted
+**twice** each — once for `mask-image`, once for `-webkit-mask-image` — and the
+container key encoded active state (`nav-on-…` / `nav-off-…`), forcing two selectors
+per icon: 36 payloads for 18 icons. Fixed by making the key stable, moving active state
+to the button `type`, and declaring each URI once as a custom property that a shared
+rule consumes. 48.3 KB, 8 KB reclaimed.
+
+**A verification that proved nothing, caught before commit.** The active-state check
+returned `primary=[]` for every page — AppTest does not expose `button.type`, so the
+assertion was vacuous. Re-verified at the function level instead: `sidebar_nav` emits
+exactly one `type="primary"` per render, for the active label, with unique keys.
+
+## 9.5 — Phase 5: the sign-in screen
+
+**Why — the security finding.** The login page printed **all three seeded credential
+pairs in plaintext to every anonymous visitor**, one of them SuperAdmin. A demo
+convenience that ships as a published credential list is not a demo convenience; it is
+three unauthenticated accounts. The brief flagged it and it is the reason this phase
+exists independently of the visual work.
+
+**How.** The seeds moved to `auth_db.SEED_CREDENTIALS` and are printed **once, to the
+server console**, at the moment an empty database is created, with the login page
+carrying a caption saying where to look. Someone with the terminal already controls the
+machine; someone with the URL does not. They are deliberately *not* written to
+`system_logs` — that table is readable through Activity Logs by any Admin, which would
+put the plaintext back in a browser by a longer route.
+
+**The screen itself:** a 44/56 full-bleed split. Left panel is Ink in both themes with
+the mono lockup, one statement of substance, three trust markers, and a large static
+Reference Rail as ambient art at 8% opacity. Right panel is a single 400px card with a
+segmented control instead of tabs.
+
+Two decisions worth recording:
+
+- **The trust markers are derived, never written.** A hard-coded "AUC 0.8000" on the
+  sign-in screen becomes a false claim the first time anyone retrains. They read the
+  shipped artifacts through the existing loaders, and they quote the **ensemble** —
+  which is what the prediction path actually uses — rather than the best single model,
+  because a headline describing a model the user never touches is a worse lie than no
+  headline. A missing artifact drops its marker instead of substituting a plausible
+  number.
+- **The ambient rail carries no value marker.** It shows the empty instrument: track,
+  four band zones at the shipped threshold proportions, notches, scale. A rail
+  displaying a *reading* on the sign-in screen would be a measurement taken on a
+  patient who does not exist. It is `aria-hidden`, unfocusable and unanimated.
+
+**Validation moved inline** — beneath each field, not a banner above. This needed the
+message to survive into the next run, so failures are written to session-state error
+dicts and cleared on every submit. Sign-in failure deliberately does not say *which*
+field was wrong: naming it turns the form into a username oracle.
+
+**Preserved exactly:** the `validate_login` call and its three statuses, the
+`log_activity` on success, the `registration_allowed()` gate (BUG-17), the Doctor-only
+role lock (BUG-09), and the six-character password minimum.
+
+**A test that polluted the live database, caught and fixed.** The XSS probe registers
+with an `<img … onerror=…>` username — and *succeeds*, because `register_user` accepts
+any non-empty string. The suite runs against `heartguard.db`, not a fixture, so it was
+leaving that account behind. The test now deletes it and asserts the deletion.
+
+**A finding left deliberately unfixed, for the record:** `register_user` performs no
+character validation on usernames. This is defended in depth — every render site passes
+through `esc()`, and the probe confirms no tag can form — but the underlying input
+validation is absent. Fixing it means changing `auth_db` authentication logic, which
+the zero-behavioural-change contract places out of bounds for a presentation-layer
+phase. Flagged rather than changed unilaterally.
+
+## 9.6 — Phase 5 gate
+
+```
+27-path AppTest         27/27 routed, 0 exceptions
+py_compile              clean on 12 modules
+pyflakes                no new warnings vs baseline
+test_tokens             0 failures   (63 assertions)
+test_brand              0 failures   (60)
+test_rail               0 failures   (71)
+test_components         0 failures   (95)
+test_login              0 failures   (68)
+CSS budget              53.4 KB / 60 KB       emotion-cache selectors: 0
+screenshots             SUBSTITUTED — see 9.0
+```
+
+## 9.7 — Carried forward
+
+Phases 6–10 remain: the diagnosis page (SHAP waterfall, counterfactual panel through
+the monotonic XGBoost, PDF download, applicability rails), `ui/charts.py` and the 39
+matplotlib call sites, dashboards and history, the Model Performance IA restructure
+from 11 tabs to 4 segmented groups, and the admin pages with the final accessibility,
+responsive and print passes.
+
+Everything listed in Run 8 §8.4 is still outstanding and unchanged.

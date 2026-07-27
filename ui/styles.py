@@ -1007,21 +1007,197 @@ def _legacy_block() -> str:
 }}
 .res-prob {{ font-size: 14px; color: var(--hg-text); margin-top: var(--hg-space-2); }}
 .res-note {{ font-size: 12.5px; color: var(--hg-text-muted); margin-top: var(--hg-space-3); line-height: 1.6; }}
-.login-wrap {{ text-align: center; }}
-.login-logo {{
-  font-family: var(--hg-font-display);
-  font-size: 38px;
-  font-weight: {T.WEIGHT['bold']};
-  color: var(--hg-primary);
-  letter-spacing: var(--hg-track-tighter);
+"""
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 5b. Login (§7.2)
+# ════════════════════════════════════════════════════════════════════════
+def _login_block() -> str:
+    """
+    The 44/56 full-bleed split.
+
+    Every rule is gated behind `:has()` on markup that only the login screen emits, so
+    this block is inert on all 27 authenticated pages. That is what makes it safe to
+    override the shell's content column here — the override cannot leak.
+
+    The left panel is Ink in BOTH themes. It is brand surface rather than page surface,
+    so it takes literal hexes, not the themed --hg-surface family. Its text colours are
+    fixed Bone alphas for the same reason.
+    """
+    ink = T.INK
+    bone = T.BONE
+    return f"""
+/* ── login: full-bleed override ───────────────────────────────────── */
+/* Scoped to the marker container emitted by ui.login.split(). The shell's 1440px
+   content column and 32px gutters would otherwise stop the split reaching the
+   viewport edges, which is the whole point of the screen. */
+.stApp:has(.st-key-login-mode) [data-testid="stMainBlockContainer"] {{
+  padding: 0 !important;
+  max-width: none !important;
 }}
-.login-brand {{
+.stApp:has(.st-key-login-mode) [data-testid="stSidebar"] {{ display: none !important; }}
+[data-testid="stHorizontalBlock"]:has(.hg-login-brand) {{
+  gap: 0 !important;
+  align-items: stretch;
+}}
+
+/* ── login: left panel ────────────────────────────────────────────── */
+[data-testid="stColumn"]:has(.hg-login-brand) {{
+  background: {ink};
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 56px clamp(28px, 4vw, 56px);
+  position: relative;
+  overflow: hidden;
+}}
+/* Guarantees the ambient art resolves against the COLUMN and not against some
+   intermediate Streamlit wrapper that a future release decides to position. */
+[data-testid="stColumn"]:has(.hg-login-brand) [data-testid="stVerticalBlock"],
+[data-testid="stColumn"]:has(.hg-login-brand) [data-testid="stMarkdownContainer"],
+[data-testid="stColumn"]:has(.hg-login-brand) .stMarkdown {{ position: static; }}
+
+.hg-login-brand {{ position: relative; z-index: 1; }}
+.hg-login-lockup {{ margin-bottom: var(--hg-space-7); }}
+.hg-login-statement {{
+  margin: 0;
+  max-width: 40ch;
+  font-size: 16px;
+  line-height: 1.65;
+  color: {T.alpha(bone, 0.74)};
+}}
+
+.hg-login-markers {{
+  margin-top: var(--hg-space-8);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}}
+.hg-login-marker {{ display: flex; align-items: baseline; gap: var(--hg-space-4); }}
+.hg-login-marker__k {{
+  flex: none;
+  min-width: 124px;
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: var(--hg-track-eyebrow);
+  color: {T.alpha(bone, 0.50)};
+}}
+.hg-login-marker__v {{
+  font-family: var(--hg-font-mono);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: {T.alpha(bone, 0.90)};
+}}
+
+/* ── login: ambient rail (decorative, 8%, static) ─────────────────── */
+.hg-login-art {{
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 33%;
+  z-index: 0;
+  opacity: 0.08;
+  color: {bone};
+  pointer-events: none;
+  display: flex;
+  align-items: flex-end;
+}}
+.hg-login-rail {{ display: block; width: 100%; height: 100%; }}
+
+/* ── login: right panel ───────────────────────────────────────────── */
+[data-testid="stColumn"]:has(.st-key-login-card) {{
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 48px clamp(16px, 3vw, 32px);
+}}
+.st-key-login-card {{
+  width: 100%;
+  max-width: 400px;
+  margin: 0 auto;
+  padding: 40px;
+  background: var(--hg-surface);
+  border: 1px solid var(--hg-border);
+  border-radius: var(--hg-radius-xl);
+  box-shadow: var(--hg-shadow-e3);
+}}
+.hg-login-head {{ margin-bottom: var(--hg-space-6); }}
+.hg-login-title {{
+  margin: 0;
   font-family: var(--hg-font-display);
-  font-size: 24px;
+  font-size: 22px;
   font-weight: {T.WEIGHT['semibold']};
+  letter-spacing: var(--hg-track-tight);
   color: var(--hg-text-heading);
 }}
-.login-tag {{ font-size: 13px; color: var(--hg-text-muted); margin-bottom: var(--hg-space-6); }}
+.hg-login-sub {{
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--hg-text-muted);
+}}
+
+/* Segmented control spans the card; Sign in / Register are equal halves. */
+.st-key-login-seg [data-testid="stSegmentedControl"] {{ width: 100%; }}
+.st-key-login-seg [data-testid="stSegmentedControl"] > div {{
+  display: flex;
+  width: 100%;
+}}
+.st-key-login-seg [data-testid="stSegmentedControl"] label {{
+  flex: 1 1 0;
+  justify-content: center;
+}}
+
+/* §7.2: primary action full width, 44px tall — the WCAG 2.2 AA target minimum. */
+.st-key-login-card .stFormSubmitButton button,
+.st-key-login-card .stButton button {{
+  width: 100%;
+  min-height: 44px;
+}}
+
+/* ── login: inline validation ─────────────────────────────────────── */
+/* Sits beneath its field, never above the form. The negative top margin pulls it
+   into the gap Streamlit leaves under an input so the message reads as belonging
+   to that field rather than floating between two of them. */
+.hg-login-err {{
+  display: flex;
+  gap: var(--hg-space-2);
+  align-items: stretch;
+  margin: -10px 0 var(--hg-space-4);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--hg-danger-text);
+}}
+.hg-login-err::before {{
+  content: '';
+  flex: none;
+  width: 2px;
+  background: var(--hg-danger-border);
+  border-radius: 1px;
+}}
+.hg-login-hint {{
+  margin: var(--hg-space-6) 0 0;
+  font-size: 11.5px;
+  line-height: 1.6;
+  text-align: center;
+  color: var(--hg-text-subtle);
+}}
+
+/* ── login: stack below 900px ─────────────────────────────────────── */
+@media (max-width: 900px) {{
+  [data-testid="stHorizontalBlock"]:has(.hg-login-brand) {{ flex-direction: column; }}
+  [data-testid="stColumn"]:has(.hg-login-brand) {{
+    min-height: auto;
+    padding: 40px 28px 0;
+  }}
+  [data-testid="stColumn"]:has(.st-key-login-card) {{ min-height: auto; padding: 32px 20px; }}
+  .hg-login-art {{ position: relative; height: 96px; margin-top: var(--hg-space-7); }}
+}}
 """
 
 
@@ -1093,6 +1269,7 @@ def stylesheet() -> str:
         _shell_block(),
         _rail_block(),
         _components_block(),
+        _login_block(),
         _legacy_block(),
         _tail_block(),
     ])
