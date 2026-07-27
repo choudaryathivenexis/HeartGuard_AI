@@ -15,6 +15,8 @@ from ui import brand as ui_brand
 from ui import components as uic
 from ui import format as fmt
 from ui import login as ui_login
+from ui import charts as ucharts
+from ui import diagnosis as ud
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -618,464 +620,663 @@ def render_sidebar(user, pages):
 
 
 # ══════════════════════════════════════════════════════════════════
-# DIAGNOSIS PAGE
+#
+# Rebuilt in Phase 6 against §7.3. The clinical pipeline is byte-for-byte the same
+# sequence it was before — physiology check, applicability check, feature build, scale,
+# per-model probability, age-stratified threshold, band classification, patient upsert,
+# add_prediction — and the assertions in tests/test_diagnosis.py pin that order.
+#
+# THREE STRUCTURAL CHANGES, each with a reason:
+#
+# 1. The inputs left st.form. §7.3 requires the applicability rails to show "the
+#    patient's current value as a live marker" so a clinician sees they are about to
+#    extrapolate BEFORE submitting. A form withholds its widget values until submit,
+#    which would draw every marker at its default while the fields above showed
+#    something else. A marker that disagrees with its own field is worse than none.
+#
+# 2. The result is therefore held in session state. Without a form, any keystroke
+#    reruns the script, and a result rendered inline would vanish the moment the
+#    clinician touched a field to compare. Scoring and the DB write still happen ONLY
+#    inside the submit branch, so the one-row-per-submit contract is unchanged.
+#
+# 3. The global feature_importances_ chart is gone. It was a static, model-level
+#    ranking — identical for every patient — captioned "Top Risk Factors" directly
+#    beneath that patient's score. It read as personalised reasoning while containing
+#    none. Replaced by the per-patient SHAP waterfall the engine has been able to
+#    produce since Run 7.
 # ══════════════════════════════════════════════════════════════════
+DIAG_FIELDS = ("age", "gender", "height", "weight", "ap_hi", "ap_lo",
+               "cholesterol", "gluc", "smoke", "alco", "active")
+
+
+def _diag_inputs():
+    """
+    The eleven clinical indicators, grouped into the four panels §7.3 specifies.
+
+    Ordered the way a clinician acquires them: demographics are free, vitals need a
+    cuff and scales, laboratory needs a blood draw, lifestyle needs a conversation.
+    Each numeric input keeps the supported-range tooltip added for BUG-23, and values
+    are deliberately NOT clamped to the envelope — a real 82-year-old must be
+    enterable — but the score they produce is then labelled an extrapolation.
+    """
+    v = {}
+    with uic.panel("Patient"):
+        a, b = st.columns(2)
+        v["p_id"] = a.text_input("Patient code", key="diag_pid",
+                                 placeholder="e.g. PT-00123")
+        v["p_name"] = b.text_input("Patient name", key="diag_pname",
+                                   placeholder="e.g. Ahmed Khan")
+
+    with uic.panel("Demographics"):
+        a, b = st.columns(2)
+        v["age"] = a.number_input("Age (years)", 1, 120, 45, key="diag_age",
+                                  help=_support_hint("age"))
+        v["gender"] = b.selectbox("Gender", [(1, "Male"), (0, "Female")],
+                                  format_func=lambda x: x[1], key="diag_gender")[0]
+
+    with uic.panel("Vitals"):
+        a, b = st.columns(2)
+        v["height"] = a.number_input("Height (cm)", 100, 250, 165, key="diag_height",
+                                     help=_support_hint("height"))
+        v["weight"] = b.number_input("Weight (kg)", 20.0, 200.0, 70.0, step=0.5,
+                                     key="diag_weight", help=_support_hint("weight"))
+        c, d = st.columns(2)
+        v["ap_hi"] = c.number_input("Systolic BP (mmHg)", 60, 250, 120,
+                                    key="diag_aphi", help=_support_hint("ap_hi"))
+        v["ap_lo"] = d.number_input("Diastolic BP (mmHg)", 40, 200, 80,
+                                    key="diag_aplo", help=_support_hint("ap_lo"))
+
+    with uic.panel("Laboratory"):
+        a, b = st.columns(2)
+        # FIXED (BUG-04): options use the dataset's 0-indexed encoding
+        # (0=Normal, 1=Above, 2=Well Above). The form previously sent 1/2/3, so
+        # "Normal" scored as above-normal and "Well Above Normal" sent a value (3)
+        # that appears nowhere in the training data.
+        v["cholesterol"] = a.selectbox("Cholesterol", fe.CHOLESTEROL_LEVELS,
+                                       format_func=lambda x: x[1], key="diag_chol")[0]
+        v["gluc"] = b.selectbox("Glucose", fe.GLUCOSE_LEVELS,
+                                format_func=lambda x: x[1], key="diag_gluc")[0]
+
+    with uic.panel("Lifestyle"):
+        a, b, c = st.columns(3)
+        yn = [(1, "Yes"), (0, "No")]
+        v["smoke"] = a.selectbox("Smoker", yn, format_func=lambda x: x[1],
+                                 key="diag_smoke")[0]
+        v["alco"] = b.selectbox("Alcohol", yn, format_func=lambda x: x[1],
+                                key="diag_alco")[0]
+        v["active"] = c.selectbox("Active", yn, format_func=lambda x: x[1],
+                                  key="diag_active")[0]
+    return v
+
+
+def _applicability_expander(inputs):
+    """
+    §7.3: the applicability expander stays directly above the submit button, redesigned
+    as a table of miniature Reference Rails.
+
+    Derived features are included because BUG-26 established that they can breach the
+    envelope while every entered value sits inside it — a tall, light patient produces
+    a BMI the model never saw from a height and weight it saw constantly.
+    """
+    env = cu.load_input_ranges()
+    if not env.get("features"):
+        return
+    live = dict(inputs)
+    try:
+        live["bmi"] = fe.compute_bmi(inputs["weight"], inputs["height"])
+    except Exception:
+        pass
+    labels = {k: fe.label_for(k) for k in ud.CONSTRAINED_FEATURES}
+    with st.expander("Model applicability — is this patient one the model has seen?"):
+        st.markdown(
+            f'<p class="hg-note">Fitted on <b>{fmt.count(env.get("trained_rows", 0))}'
+            f'</b> patients. The bar shows the full observed range; the shaded zone is '
+            f'the typical 1st–99th percentile; the hatched shoulders are sparse '
+            f'territory. A marker outside the bar is an extrapolation and is labelled '
+            f'as one on the result.</p>', unsafe_allow_html=True)
+        st.markdown(ud.applicability_rails(env, live, labels), unsafe_allow_html=True)
+
+
 def page_diagnosis(user):
-    section_header("", "Patient Diagnosis Console",
-                   "AI-powered cardiovascular risk assessment from clinical indicators")
+    uic.page_header(
+        "Heart disease screening",
+        "Cardiovascular risk estimated from eleven clinical indicators, with the "
+        "model's operating point and applicability disclosed on every result.")
 
     scaler, all_models = load_models()
     cfg = load_config()
     active_models = {k: v for k, v in all_models.items() if cfg.get(k, True)}
 
-    all_preds = auth_db.get_predictions(user_id=user['id'] if user['role'] == 'Doctor' else None)
-    risk_c = sum(1 for p in all_preds if p['predicted_class'] == 1)
-    safe_c = len(all_preds) - risk_c
-
-    st.markdown('<div class="kpi-wrap">' +
-                kpi(len(all_preds), "Total Scans", "#60a5fa", "linear-gradient(135deg,#1e3a5f,#0f2544)", "#1e40af") +
-                kpi(risk_c, "High Risk", "#ef4444", "linear-gradient(135deg,#3b1f1f,#1e0d0d)", "#ef4444") +
-                kpi(safe_c, "Low Risk", "#10b981", "linear-gradient(135deg,#0d2e1e,#071a10)", "#10b981") +
-                kpi(len(active_models), "Active Models", "#a855f7", "linear-gradient(135deg,#2d1f40,#180d2e)", "#a855f7") +
-                '</div>', unsafe_allow_html=True)
-
     if not active_models or scaler is None:
-        st.markdown('<div class="alert-warning">No trained models available. Ask SuperAdmin to trigger model training.</div>',
-                    unsafe_allow_html=True)
+        uic.alert("warning", "No trained models available",
+                  "Ask a SuperAdmin to run model training before using this page.")
         return
 
-    col_form, col_out = st.columns([3, 2], gap="large")
+    col_form, col_out = st.columns([58, 42], gap="large")
 
     with col_form:
-        st.markdown("#### Patient Clinical Indicators")
-        with st.form("diag_form"):
-            pid_col, pname_col = st.columns(2)
-            with pid_col:
-                p_id = st.text_input("Patient ID *", placeholder="e.g. PT-00123")
-            with pname_col:
-                p_name = st.text_input("Patient Name *", placeholder="e.g. Ahmed Khan")
-            c1, c2 = st.columns(2)
-            with c1:
-                # BUG-23: surface the model's supported range on each input, so a
-                # clinician sees the limit BEFORE submitting rather than being warned
-                # after the fact. Values are deliberately NOT clamped to the envelope —
-                # a real 82-year-old patient must be enterable — but the score they
-                # produce is then labelled as an extrapolation.
-                age = st.number_input("Age (years)", 1, 120, 45,
-                                      help=_support_hint("age"))
-                gender = st.selectbox("Gender", [(1, "Male"), (0, "Female")],
-                                      format_func=lambda x: x[1])[0]
-                height = st.number_input("Height (cm)", 100, 250, 165,
-                                        help=_support_hint("height"))
-                weight = st.number_input("Weight (kg)", 20.0, 200.0, 70.0, step=0.5,
-                                         help=_support_hint("weight"))
-                ap_hi = st.number_input("Systolic BP (ap_hi mmHg)", 60, 250, 120,
-                                        help=_support_hint("ap_hi"))
-                ap_lo = st.number_input("Diastolic BP (ap_lo mmHg)", 40, 200, 80,
-                                        help=_support_hint("ap_lo"))
-            with c2:
-                # FIXED (BUG-04): options now use the dataset's 0-indexed encoding
-                # (0=Normal, 1=Above, 2=Well Above). The form previously sent 1/2/3,
-                # so "Normal" was scored as above-normal and "Well Above Normal" sent a
-                # value (3) that appears nowhere in the training data.
-                cholesterol = st.selectbox("Cholesterol Level",
-                                           fe.CHOLESTEROL_LEVELS,
-                                           format_func=lambda x: x[1])[0]
-                gluc = st.selectbox("Glucose Level",
-                                    fe.GLUCOSE_LEVELS,
-                                    format_func=lambda x: x[1])[0]
-                smoke = st.selectbox("Smoker?", [(1, "Yes"), (0, "No")], format_func=lambda x: x[1])[0]
-                alco = st.selectbox("Alcohol Use?", [(1, "Yes"), (0, "No")], format_func=lambda x: x[1])[0]
-                active = st.selectbox("Physically Active?", [(1, "Yes"), (0, "No")], format_func=lambda x: x[1])[0]
-            # BUG-23: make the applicability envelope discoverable before a clinician
-            # ever submits an out-of-scope patient.
-            _env = cu.load_input_ranges()
-            if _env.get("features"):
-                with st.expander("Model applicability — who this model is valid for"):
-                    st.markdown(
-                        f"Fitted on **{_env.get('trained_rows', 0):,} patients**. "
-                        f"Predictions outside these ranges are extrapolation and are "
-                        f"flagged as such.")
-                    st.dataframe(pd.DataFrame([{
-                        "Measurement": fe.label_for(f),
-                        "Supported range": f"{d['min']:g} – {d['max']:g}",
-                        "Typical (1st–99th pct)": f"{d['p1']:g} – {d['p99']:g}",
-                        "Mean": f"{d['mean']:g}",
-                    } for f, d in _env["features"].items()
-                        if f in ("age", "height", "weight", "ap_hi", "ap_lo", "bmi")]),
-                        hide_index=True, use_container_width=True)
-
+        vals = _diag_inputs()
+        with uic.panel("Model"):
             model_opts = ["Ensemble Voting (All Models)"] + list(active_models.keys())
-            model_choice = st.selectbox("AI Model", model_opts)
-            notes = st.text_area("Clinical Notes (optional)", height=60)
-            submit = st.form_submit_button("Generate Risk Assessment", use_container_width=True)
+            model_choice = st.selectbox("Scoring model", model_opts, key="diag_model")
+            notes = st.text_area("Clinical notes (optional)", height=68,
+                                 key="diag_notes")
+        _applicability_expander(vals)
+        submit = st.button("Run assessment", type="primary",
+                           use_container_width=True, key="diag_submit")
+
+    if submit:
+        st.session_state.diag_result = _run_assessment(
+            user, vals, model_choice, notes, scaler, active_models)
 
     with col_out:
-        st.markdown("#### Risk Assessment Output")
-        if submit:
-            if not p_id.strip() or not p_name.strip():
-                st.error("Patient ID and Patient Name are required fields (marked with *).")
-                st.stop()
-            # FIXED (BUG-05): engineered features now come from the shared module, so
-            # training and inference cannot drift apart. This logic previously existed
-            # in three unsynchronised copies with different `high_risk_flag` thresholds.
-            _inputs = dict(age=age, gender=gender, height=height, weight=weight,
-                           ap_hi=ap_hi, ap_lo=ap_lo,
-                           cholesterol=cholesterol, gluc=gluc,
-                           smoke=smoke, alco=alco, active=active)
-
-            # ── BUG-26: physiological validity, checked BEFORE scoring ──
-            # Distinct from the applicability guard below. Extrapolation means "a real
-            # patient the model has not seen" and earns a warning; this means "not a
-            # possible measurement" and must be refused. 90/180 was previously accepted
-            # and returned a confident LOW RISK verdict.
-            _phys_errors = fe.validate_physiology(_inputs)
-            if _phys_errors:
-                st.markdown(
-                    '<div style="background:linear-gradient(135deg,#3b1010,#1e0808);'
-                    'border:2px solid #ef4444;border-radius:10px;padding:13px 15px;">'
-                    '<div style="color:#fca5a5;font-weight:800;">IMPLAUSIBLE '
-                    'MEASUREMENT — NOT SCORED</div>'
-                    '<div style="color:#fecaca;font-size:.84em;margin-top:6px;'
-                    'line-height:1.7;"><ul style="margin:4px 0 0 18px;padding:0;">'
-                    + "".join(f"<li>{esc(e)}</li>" for e in _phys_errors) +
-                    '</ul></div></div>', unsafe_allow_html=True)
-                st.stop()
-
-            # ── BUG-23: applicability check ─────────────────────────────
-            # A risk estimate is only valid for the population it was fitted on.
-            # This runs BEFORE anything is rendered, because a hard extrapolation
-            # invalidates the peer percentile and the care plan, not just the score.
-            _app_warn, _extrapolated = cu.check_applicability(_inputs)
-            _app_notes = "; ".join(
-                f"{w['label']}={w['value']:g} outside {w['supported'][0]:g}-"
-                f"{w['supported'][1]:g} ({w['severity']})" for w in _app_warn)
-
-            features = fe.build_feature_row(**_inputs)
-            feats_s = scaler.transform([features])
-
-            # FIXED (BUG-18): one decision rule for both paths.
-            # UPGRADED (Run 4): the threshold is now derived per model from the holdout
-            # ROC at a >=85% sensitivity target, not hardcoded at 0.5.
-            probs = {}
-            for mn, mo in active_models.items():
-                probs[mn] = float(mo.predict_proba(feats_s)[0][1])
-            # Run 5: each model scored at ITS OWN age-stratified operating point.
-            preds = {mn: int(p >= get_stratified_threshold(mn, age))
-                     for mn, p in probs.items()}
-
-            if "Ensemble" in model_choice:
-                final_prob = float(np.mean(list(probs.values())))
-                used_label = "Ensemble Voting"
+        with st.container(key="diag-result"):
+            res = st.session_state.get("diag_result")
+            if res is None:
+                uic.empty_state(
+                    "No assessment yet",
+                    "Enter the patient's indicators and select Run assessment. The "
+                    "result appears here with its operating point and reliability.")
+            elif res.get("refused"):
+                _render_refusal(res)
             else:
-                final_prob = probs[model_choice]
-                used_label = model_choice
+                _render_result(res, user)
 
-            risk_threshold = get_stratified_threshold(used_label, age)
-            final_pred = int(final_prob >= risk_threshold)
-            band_label, band_color, band_action = classify_risk_band(
-                final_prob, used_label, active_threshold=risk_threshold)
-            _thr_meta = load_thresholds().get("models", {}).get(used_label, {})
-            _sub_rel = patient_subgroup_reliability(age, used_label)
-            _age_band = fe.age_band_label(age)
 
-            # Run 7: link the assessment to a patient entity and stamp it with the
-            # model version and operating point that produced it.
-            _ver = cu.model_version_info()
-            # BUG-24: linking to a patient entity must never be able to lose the
-            # assessment itself. If the patient row cannot be created for any reason,
-            # record the prediction unattached and say so, rather than raising.
-            try:
-                _patient_ref = auth_db.upsert_patient(
-                    p_id.strip(), p_name.strip(), gender, user['id'])
-            except Exception as _pe:
-                _patient_ref = None
-                st.markdown(
-                    f'<div class="alert-warning" style="font-size:.8em;">'
-                    f'Could not link this assessment to a patient record '
-                    f'({esc(type(_pe).__name__)}). The assessment has still been saved, '
-                    f'but it will not appear in the patient timeline.</div>',
-                    unsafe_allow_html=True)
-            auth_db.add_prediction(
-                user['id'], age, gender, height, weight, ap_hi, ap_lo,
-                cholesterol, gluc, smoke, alco, active,
-                final_pred, final_prob, used_label, p_name, notes,
-                patient_ref=_patient_ref,
-                model_version=_ver["version"],
-                model_manifest_sha=_ver["manifest_sha"],
-                threshold_used=risk_threshold,
-                risk_band=band_label,
-                extrapolated=int(_extrapolated),
-                applicability_notes=_app_notes)
+# ──────────────────────────────────────────────────────────────────
+# Scoring — unchanged pipeline, extracted so the render path can rerun without it
+# ──────────────────────────────────────────────────────────────────
+def _run_assessment(user, vals, model_choice, notes, scaler, active_models):
+    """
+    Score one patient and persist the row. Returns a plain dict for rendering.
 
-            # ── BUG-23: applicability banner, rendered FIRST ────────────
-            # Placed above the verdict deliberately. If the model is extrapolating,
-            # that is the most important thing on the screen — a clinician must see it
-            # before reading a number that looks authoritative.
-            if _extrapolated:
-                _hard = [w for w in _app_warn if w["severity"] == "hard"]
-                _rows = "".join(
-                    f"<li><b>{esc(w['label'])} = {w['value']:g}</b> — model was fitted "
-                    f"on {w['supported'][0]:g}–{w['supported'][1]:g}</li>"
-                    for w in _hard)
-                st.markdown(f"""
-                <div style="background:linear-gradient(135deg,#3b1010,#1e0808);
-                border:2px solid #ef4444;border-radius:10px;padding:13px 15px;
-                margin-bottom:10px;">
-                <div style="color:#fca5a5;font-weight:800;font-size:1.0em;
-                letter-spacing:.3px;">OUTSIDE MODEL APPLICABILITY</div>
-                <div style="color:#fecaca;font-size:.84em;margin-top:6px;line-height:1.7;">
-                This patient falls outside the population the model was trained on:
-                <ul style="margin:6px 0 6px 18px;padding:0;">{_rows}</ul>
-                The risk estimate below is an <b>extrapolation</b>. It has not been
-                validated for this patient and must not be relied upon for a clinical
-                decision. Peer comparison is withheld — there is no valid reference
-                population for this patient.
-                </div></div>""", unsafe_allow_html=True)
-            elif _app_warn:
-                _soft = ", ".join(f"{esc(w['label'])} {w['value']:g}" for w in _app_warn)
-                st.markdown(
-                    f'<div class="alert-warning" style="font-size:.83em;">'
-                    f'<b>Sparse training support.</b> {_soft} — within the model\'s '
-                    f'observed range but beyond the typical 1st–99th percentile. '
-                    f'Estimate is usable but less certain than for a typical patient.'
-                    f'</div>', unsafe_allow_html=True)
+    Extracted from the render path so that redrawing the result — which now happens on
+    every keystroke, because the inputs are no longer inside a form — cannot rescore
+    the patient or write a second database row.
+    """
+    p_id, p_name = vals["p_id"].strip(), vals["p_name"].strip()
+    if not p_id or not p_name:
+        return {"refused": "fields",
+                "errors": ["Patient code and patient name are both required."]}
 
-            # Run 4: four-tier band replaces the binary HIGH/LOW verdict, and the
-            # operating point is disclosed rather than hidden.
-            _res_cls = "res-risk" if final_pred == 1 else "res-safe"
-            st.markdown(f"""
-            <div class="{_res_cls}">
-            <div class="res-title" style="color:{band_color};">{band_label}{
-                ' (EXTRAPOLATED)' if _extrapolated else ''}</div>
-            <div class="res-prob">Risk Probability: <b>{final_prob:.1%}</b></div>
-            <div class="res-note">{band_action}</div>
-            </div>""", unsafe_allow_html=True)
+    inputs = {k: vals[k] for k in DIAG_FIELDS}
 
-            # Run 5: report the operating point AND the model's measured reliability
-            # for this patient's age band. Aggregate metrics hid that discrimination
-            # ranges from 0.84 (under 45) to 0.73 (55-59) — a clinician cannot
-            # calibrate trust in a score without knowing that.
-            if _sub_rel:
-                _auc = _sub_rel.get("auc", 0)
-                _cil, _cih = _sub_rel.get("auc_ci_low"), _sub_rel.get("auc_ci_high")
-                _ci_txt = f" [{_cil:.3f}–{_cih:.3f}]" if _cil is not None else ""
-                _tone = "#10b981" if _auc >= 0.80 else "#f59e0b" if _auc >= 0.75 else "#ef4444"
-                _strength = ("Strong" if _auc >= 0.80 else
-                             "Moderate" if _auc >= 0.75 else "Limited")
-                st.markdown(
-                    f"""<div style="background:#0f172a;border:1px solid #1e293b;border-radius:8px;
-                    padding:9px 11px;margin-top:8px;font-size:.76em;color:#94a3b8;line-height:1.7;">
-                    <b style="color:#cbd5e1;">Model reliability for this patient</b>
-                    &nbsp;—&nbsp; age band <b style="color:#e2e8f0;">{esc(_age_band)}</b><br>
-                    Discrimination <b style="color:{_tone};">{_strength} (AUC {_auc:.3f}{_ci_txt})</b>
-                    &nbsp;·&nbsp; calibration gap
-                    <b style="color:#e2e8f0;">{_sub_rel.get('calibration_gap', 0):+.3f}</b>
-                    &nbsp;·&nbsp; measured on <b style="color:#e2e8f0;">{_sub_rel.get('n', 0):,}</b>
-                    held-out patients<br>
-                    <span style="color:#64748b;">Band-specific operating point
-                    <b style="color:#cbd5e1;">{risk_threshold:.3f}</b> &nbsp;·&nbsp;
-                    sensitivity <b style="color:#cbd5e1;">{_sub_rel.get('sensitivity', 0):.1%}</b>
-                    &nbsp;·&nbsp; specificity
-                    <b style="color:#cbd5e1;">{_sub_rel.get('specificity', 0):.1%}</b>
-                    &nbsp;·&nbsp; PPV
-                    <b style="color:#cbd5e1;">{_sub_rel.get('ppv', 0):.1%}</b></span><br>
-                    Threshold is age-stratified and tuned for screening sensitivity —
-                    it flags more patients for follow-up rather than minimising false alarms.
-                    </div>""", unsafe_allow_html=True)
-                if _auc < 0.75:
-                    st.markdown(
-                        '<div class="alert-warning" style="font-size:.8em;">'
-                        '<b>Interpret with extra caution.</b> The model discriminates less '
-                        'well in this age band than overall. Weight clinical judgement '
-                        'more heavily than the score.</div>', unsafe_allow_html=True)
+    # ── BUG-26: physiological validity, checked BEFORE scoring ──
+    # Distinct from the applicability guard below. Extrapolation means "a real patient
+    # the model has not seen" and earns a warning; this means "not a possible
+    # measurement" and must be refused. 90/180 was previously accepted and returned a
+    # confident LOW RISK verdict.
+    phys_errors = fe.validate_physiology(inputs)
+    if phys_errors:
+        return {"refused": "physiology", "errors": phys_errors}
 
-            elif _thr_meta:
-                st.markdown(
-                    f"""<div style="background:#0f172a;border:1px solid #1e293b;border-radius:8px;
-                    padding:8px 11px;margin-top:8px;font-size:.76em;color:#94a3b8;line-height:1.65;">
-                    <b style="color:#cbd5e1;">Operating point</b> &nbsp;
-                    threshold <b style="color:#e2e8f0;">{risk_threshold:.3f}</b> &nbsp;·&nbsp;
-                    sensitivity <b style="color:#e2e8f0;">{_thr_meta.get('sensitivity', 0):.1%}</b> &nbsp;·&nbsp;
-                    specificity <b style="color:#e2e8f0;">{_thr_meta.get('specificity', 0):.1%}</b><br>
-                    Tuned for screening sensitivity.
-                    </div>""", unsafe_allow_html=True)
+    # ── BUG-23: applicability check ─────────────────────────────
+    # A risk estimate is only valid for the population it was fitted on. This runs
+    # BEFORE anything is rendered, because a hard extrapolation invalidates the peer
+    # percentile and the care plan, not just the score.
+    app_warn, extrapolated = cu.check_applicability(inputs)
+    app_notes = "; ".join(
+        f"{w['label']}={w['value']:g} outside {w['supported'][0]:g}-"
+        f"{w['supported'][1]:g} ({w['severity']})" for w in app_warn)
 
-            # ── Peer comparison, GATED on applicability (BUG-23) ────────
-            # searchsorted against an age x sex reference distribution is meaningless
-            # when the patient's age has no reference stratum: an 82-year-old would be
-            # silently ranked against 60-65 year-olds and told they are "typical".
-            # Withheld rather than approximated.
-            _pct = _pct_label = None
-            if _extrapolated:
-                st.markdown(
-                    '<div style="font-size:.76em;color:#64748b;margin-top:6px;">'
-                    'Peer comparison withheld — no reference population for this '
-                    'patient within the model\'s training envelope.</div>',
-                    unsafe_allow_html=True)
+    # FIXED (BUG-05): engineered features come from the shared module, so training and
+    # inference cannot drift apart.
+    features = fe.build_feature_row(**inputs)
+    feats_s = scaler.transform([features])
+
+    # FIXED (BUG-18): one decision rule for both paths.
+    # Run 4: the threshold is derived per model from the holdout ROC at a >=85%
+    # sensitivity target, not hardcoded at 0.5.
+    # Run 5: each model scored at ITS OWN age-stratified operating point.
+    age = inputs["age"]
+    probs = {mn: float(mo.predict_proba(feats_s)[0][1])
+             for mn, mo in active_models.items()}
+    member_thresholds = {mn: get_stratified_threshold(mn, age) for mn in probs}
+    preds = {mn: int(p >= member_thresholds[mn]) for mn, p in probs.items()}
+
+    if "Ensemble" in model_choice:
+        final_prob = float(np.mean(list(probs.values())))
+        used_label = "Ensemble Voting"
+    else:
+        final_prob = probs[model_choice]
+        used_label = model_choice
+
+    risk_threshold = get_stratified_threshold(used_label, age)
+    final_pred = int(final_prob >= risk_threshold)
+    band_label, band_color, band_action = classify_risk_band(
+        final_prob, used_label, active_threshold=risk_threshold)
+    thr_meta = load_thresholds().get("models", {}).get(used_label, {})
+    sub_rel = patient_subgroup_reliability(age, used_label)
+    age_band = fe.age_band_label(age)
+    ver = cu.model_version_info()
+
+    # Run 7: link the assessment to a patient entity and stamp it with the model
+    # version and operating point that produced it.
+    # BUG-24: linking to a patient entity must never be able to lose the assessment.
+    link_error = None
+    try:
+        patient_ref = auth_db.upsert_patient(p_id, p_name, inputs["gender"], user['id'])
+    except Exception as pe:
+        patient_ref, link_error = None, type(pe).__name__
+
+    auth_db.add_prediction(
+        user['id'], inputs["age"], inputs["gender"], inputs["height"],
+        inputs["weight"], inputs["ap_hi"], inputs["ap_lo"],
+        inputs["cholesterol"], inputs["gluc"], inputs["smoke"], inputs["alco"],
+        inputs["active"], final_pred, final_prob, used_label, p_name, notes,
+        patient_ref=patient_ref,
+        model_version=ver["version"],
+        model_manifest_sha=ver["manifest_sha"],
+        threshold_used=risk_threshold,
+        risk_band=band_label,
+        extrapolated=int(extrapolated),
+        applicability_notes=app_notes)
+
+    # Peer comparison, GATED on applicability (BUG-23). searchsorted against an
+    # age×sex reference distribution is meaningless when the patient's age has no
+    # stratum: an 82-year-old would be silently ranked against 60–65 year-olds and
+    # told they are typical. Withheld rather than approximated.
+    pct_v = pct_label = pct_n = None
+    if not extrapolated:
+        pct_v, pct_label, pct_n = cu.risk_percentile(final_prob, age, inputs["gender"])
+
+    res = {
+        "refused": None, "inputs": inputs, "p_id": p_id, "p_name": p_name,
+        "notes": notes, "probs": probs, "preds": preds,
+        "member_thresholds": member_thresholds,
+        "final_prob": final_prob, "final_pred": final_pred,
+        "used_label": used_label, "model_choice": model_choice,
+        "threshold": risk_threshold, "band_label": band_label,
+        "band_action": band_action, "thr_meta": thr_meta, "sub_rel": sub_rel,
+        "age_band": age_band, "version": ver, "patient_ref": patient_ref,
+        "link_error": link_error, "app_warn": app_warn,
+        "extrapolated": extrapolated, "app_notes": app_notes,
+        "percentile": pct_v, "pct_label": pct_label, "pct_n": pct_n,
+        "features": features, "feats_scaled": feats_s,
+    }
+    res.update(_explain(res, scaler, active_models))
+    return res
+
+
+def _explain(res, scaler, active_models):
+    """
+    Per-patient SHAP and the counterfactual table.
+
+    Both are computed once, here, and cached in the result — they are the two
+    expensive operations on this page and the render path now runs on every keystroke.
+
+    §7.3 routes counterfactuals through the MONOTONIC XGBOOST, not the ensemble. The
+    reason is not preference: XGBoost carries monotone_constraints, so a change in a
+    protective direction cannot raise its predicted risk. Averaging it with
+    unconstrained members reintroduces exactly the paradoxical rows the constraint
+    exists to prevent, and the panel would then report "lower your blood pressure" as
+    an increase in risk.
+    """
+    out = {"shap": None, "shap_error": None, "explainer": None,
+           "explainer_surrogate": False, "counterfactuals": None, "cf_model": None}
+
+    feat_names = _feature_names()
+    try:
+        exp_name, surrogate = cu.resolve_explainer_model(
+            res["model_choice"], active_models)
+        out["explainer"], out["explainer_surrogate"] = exp_name, surrogate
+        model = active_models.get(exp_name)
+        if model is not None:
+            vals, base, err = cu.explain_patient(
+                model, res["feats_scaled"], feat_names)
+            if err:
+                out["shap_error"] = err
             else:
-                _pct, _pct_label, _pct_n = cu.risk_percentile(final_prob, age, gender)
-                if _pct is not None:
-                    st.markdown(
-                        f'<div style="background:#0f172a;border:1px solid #1e293b;'
-                        f'border-radius:8px;padding:8px 11px;margin-top:8px;'
-                        f'font-size:.78em;color:#94a3b8;line-height:1.7;">'
-                        f'<b style="color:#cbd5e1;">Peer comparison</b> &nbsp; higher risk '
-                        f'than <b style="color:#e2e8f0;">{_pct}%</b> of patients in the '
-                        f'same group ({esc(_pct_label)}, n={_pct_n:,})</div>',
-                        unsafe_allow_html=True)
+                out["shap"] = (vals, base)
+    except Exception as exc:
+        out["shap_error"] = type(exc).__name__
 
-            bar_col = band_color
-            st.markdown(f"""
-            <div style="background:#1e293b;border-radius:8px;height:10px;margin:8px 0;">
-            <div style="background:{bar_col};width:{final_prob * 100:.1f}%;height:10px;border-radius:8px;transition:width .5s;"></div>
-            </div>
-            <div style="color:#64748b;font-size:.8em;text-align:right;">{final_prob:.1%} cardiovascular risk</div>
-            """, unsafe_allow_html=True)
+    cf_name = "XGBoost" if "XGBoost" in active_models else None
+    if cf_name is None:
+        # No constrained model available. Report nothing rather than falling back to
+        # the ensemble — a paradoxical row from an unconstrained average would be
+        # indistinguishable from a real model limitation.
+        out["cf_model"] = None
+    else:
+        try:
+            out["cf_model"] = cf_name
+            out["counterfactuals"] = cu.counterfactual_table(
+                {cf_name: active_models[cf_name]}, scaler, {cf_name: 1.0},
+                res["inputs"], res["final_prob"])
+        except Exception:
+            out["counterfactuals"] = None
+    return out
 
-            # ── Risk Factor Contribution Chart ─────────────────────────
-            try:
-                _feat_path = os.path.join(MODELS_DIR, "features.json")
-                _feat_labels_map = {
-                    "age": "Age", "gender": "Gender", "height": "Height",
-                    "weight": "Weight", "ap_hi": "Systolic BP",
-                    "ap_lo": "Diastolic BP", "cholesterol": "Cholesterol",
-                    "gluc": "Glucose", "smoke": "Smoker", "alco": "Alcohol",
-                    "active": "Physically Active", "bmi": "BMI",
-                    "pulse_pressure": "Pulse Pressure",
-                    "age_group": "Age Group", "high_risk_flag": "High Risk Flag"
-                }
-                _default_fn = ["age","gender","height","weight","ap_hi","ap_lo",
-                               "cholesterol","gluc","smoke","alco","active",
-                               "bmi","pulse_pressure","age_group","high_risk_flag"]
-                if os.path.exists(_feat_path):
-                    with open(_feat_path) as _ff:
-                        _feat_names = json.load(_ff)
-                else:
-                    _feat_names = _default_fn
-                # Try to get feature importances from the best tree model
-                _fi_vals = None
-                for _try_m in ["Random Forest", "XGBoost", "Decision Tree"]:
-                    _try_file = {
-                        "Random Forest": "random_forest.pkl",
-                        "XGBoost": "xgboost.pkl",
-                        "Decision Tree": "decision_tree.pkl"
-                    }.get(_try_m)
-                    _try_path = os.path.join(MODELS_DIR, _try_file)
-                    if os.path.exists(_try_path):
-                        with open(_try_path, "rb") as _ff2:
-                            _try_model = pickle.load(_ff2)
-                        if hasattr(_try_model, "feature_importances_") and \
-                                len(_try_model.feature_importances_) == len(_feat_names):
-                            _fi_vals = _try_model.feature_importances_
-                            _fi_model_name = _try_m
-                            break
-                if _fi_vals is not None:
-                    _fi_norm = _fi_vals / (_fi_vals.sum() + 1e-9)
-                    _feat_display = [_feat_labels_map.get(fn, fn) for fn in _feat_names]
-                    _fi_pairs = sorted(zip(_feat_display, _fi_norm),
-                                       key=lambda x: x[1], reverse=True)
-                    _top8 = _fi_pairs[:8]
-                    _lbs, _wts = zip(*_top8)
-                    _bar_cols_fi = [
-                        '#ef4444' if w >= 0.12 else
-                        '#f59e0b' if w >= 0.07 else '#3b82f6'
-                        for w in _wts
-                    ]
-                    st.markdown("**Top Risk Factors (model-based importance)**")
-                    fig_pfi, ax_pfi = plt.subplots(
-                        figsize=(5.5, 3.2), facecolor='#0d1117')
-                    ax_pfi.set_facecolor('#161b22')
-                    _bars_pfi = ax_pfi.barh(
-                        list(_lbs)[::-1], [w*100 for w in _wts][::-1],
-                        color=list(_bar_cols_fi)[::-1], height=0.6)
-                    ax_pfi.set_xlabel("Importance (%)", color='#c9d1d9', fontsize=8)
-                    ax_pfi.set_title(
-                        f"Feature Weights ({_fi_model_name})",
-                        color='#c9d1d9', fontsize=8.5, fontweight='700')
-                    ax_pfi.tick_params(colors='#c9d1d9', labelsize=7.5)
-                    for sp in ['top','right']:   ax_pfi.spines[sp].set_visible(False)
-                    for sp in ['left','bottom']: ax_pfi.spines[sp].set_color('#30363d')
-                    for bar in _bars_pfi:
-                        ax_pfi.text(
-                            bar.get_width() + 0.3,
-                            bar.get_y() + bar.get_height()/2,
-                            f"{bar.get_width():.1f}%",
-                            va='center', color='#c9d1d9',
-                            fontsize=7, fontweight='600')
-                    plt.tight_layout()
-                    st.pyplot(fig_pfi, transparent=True)
-                    plt.close()
-            except Exception:
-                pass  # silently skip if feature importance unavailable
 
-            if "Ensemble" in model_choice:
-                st.markdown("**Model Breakdown:**")
-                bd = pd.DataFrame({
-                    "Model": list(probs.keys()),
-                    "Probability": [f"{v:.1%}" for v in probs.values()],
-                    "Verdict": ["Risk" if preds[k] == 1 else "Safe" for k in probs]
-                })
-                st.dataframe(bd, hide_index=True, use_container_width=True)
+def _feature_names():
+    try:
+        fp = os.path.join(MODELS_DIR, "features.json")
+        if os.path.exists(fp):
+            with open(fp) as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return list(fe.FEATURE_ORDER)
 
-            # FIXED (BUG-04): labels sourced from the shared 0-indexed encoding.
-            chol_label = fe.CHOLESTEROL_LABELS.get(cholesterol, str(cholesterol))
-            gluc_label = fe.GLUCOSE_LABELS.get(gluc, str(gluc))
-            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            report = f"""==================================================
+
+# ──────────────────────────────────────────────────────────────────
+# Rendering — strict vertical priority, §7.3
+# ──────────────────────────────────────────────────────────────────
+def _render_refusal(res):
+    if res["refused"] == "fields":
+        uic.alert("warning", "Missing patient identification", res["errors"][0])
+        return
+    # BUG-26. "Not scored" is stated in the title, not buried in the body: the absence
+    # of a number is the finding.
+    uic.alert("danger", "Implausible measurement — not scored",
+              "These values cannot describe a real patient, so no risk estimate was "
+              "produced. Correct them and run the assessment again.",
+              items=res["errors"])
+
+
+def _render_result(res, user):
+    # 0 ── WHOSE RESULT IS THIS ─────────────────────────────────────
+    # Not decoration. The result now persists in session state across reruns, so a
+    # clinician who starts entering a second patient sees the FIRST patient's verdict
+    # still on screen beside the new form. Without the code and name attached, the two
+    # are indistinguishable. This label is what makes the persistence safe.
+    st.markdown(
+        '<div class="hg-result-id">'
+        + uic.identifier(res["p_id"], "Patient")
+        + uic.identifier(res["p_name"], "Name")
+        + uic.identifier(res["version"]["version"], "Model")
+        + '</div>', unsafe_allow_html=True)
+
+    # 1 ── EXTRAPOLATION BANNER, above everything, never collapsed ──
+    if res["extrapolated"]:
+        hard = [w for w in res["app_warn"] if w["severity"] == "hard"]
+        uic.alert(
+            "extrapolation", "Outside model applicability",
+            "This patient falls outside the population the model was fitted on. The "
+            "estimate below is an extrapolation: it has not been validated for this "
+            "patient and must not be relied upon for a clinical decision. Peer "
+            "comparison is withheld.",
+            items=[f"{w['label']} = {w['value']:g} — fitted on "
+                   f"{w['supported'][0]:g}–{w['supported'][1]:g}" for w in hard])
+    elif res["app_warn"]:
+        uic.alert(
+            "warning", "Sparse training support",
+            "Within the model's observed range but beyond the typical 1st–99th "
+            "percentile. The estimate is usable but less certain than for a typical "
+            "patient.",
+            items=[f"{w['label']} = {w['value']:g}" for w in res["app_warn"]])
+
+    if res["link_error"]:
+        # BUG-24: the assessment is saved either way; say what was lost.
+        uic.alert("warning", "Not linked to a patient record",
+                  f"The assessment was saved, but linking it to the patient timeline "
+                  f"failed ({res['link_error']}). It will not appear under this "
+                  f"patient's history.")
+
+    # 2 ── THE VERDICT ───────────────────────────────────────────────
+    bands = _band_edges(res["used_label"])
+    uic.risk_verdict(res["final_prob"], res["band_label"],
+                     _band_key(res["band_label"]), bands, res["threshold"],
+                     res["band_action"], extrapolated=res["extrapolated"])
+
+    # 3 ── OPERATING POINT ───────────────────────────────────────────
+    src = res["sub_rel"] or res["thr_meta"] or {}
+    uic.operating_point(
+        res["threshold"], src.get("sensitivity"), src.get("specificity"),
+        src.get("ppv"), src.get("npv"),
+        source=(f"Derived for ages {res['age_band'].lower()} from out-of-fold "
+                f"predictions at a {_target_sensitivity():.0%} sensitivity target."
+                if res["sub_rel"] else
+                "Derived from out-of-fold predictions at a "
+                f"{_target_sensitivity():.0%} sensitivity target."))
+
+    # 4 ── RELIABILITY FOR THIS PATIENT'S BAND ───────────────────────
+    # Run 5: aggregate metrics hid that discrimination ranges from 0.84 (under 45) to
+    # 0.73 (55–59). A clinician cannot calibrate trust in a score without that.
+    sr = res["sub_rel"]
+    if sr:
+        uic.reliability_panel(
+            sr.get("auc"), sr.get("auc_ci_low"), sr.get("auc_ci_high"),
+            sr.get("calibration_gap"), sr.get("n"),
+            band_label=res["age_band"], overall=_overall_auc(res["used_label"]))
+        if (sr.get("auc") or 1) < 0.75:
+            # Wording preserved verbatim from Run 5 — §7.3 requires it unchanged.
+            uic.alert("warning", "Interpret with extra caution",
+                      "The model discriminates less well in this age band than "
+                      "overall. Weight clinical judgement more heavily than the score.")
+
+    # 5 ── PER-PATIENT SHAP ──────────────────────────────────────────
+    _render_shap(res)
+
+    # 6 ── COUNTERFACTUALS ───────────────────────────────────────────
+    _render_counterfactuals(res)
+
+    # 7 ── PEER PERCENTILE ───────────────────────────────────────────
+    if res["extrapolated"]:
+        st.markdown(ud.peer_withheld(), unsafe_allow_html=True)
+    elif res["percentile"] is not None:
+        st.markdown(ud.peer_percentile(res["percentile"], res["pct_label"],
+                                       res["pct_n"]), unsafe_allow_html=True)
+
+    # Model agreement, when the ensemble was used.
+    if "Ensemble" in res["model_choice"]:
+        uic.section("Member models",
+                    "Each model scored at its own age-stratified operating point.")
+        st.markdown(ud.model_breakdown(res["probs"], res["preds"],
+                                       res["member_thresholds"]),
+                    unsafe_allow_html=True)
+
+    # 8 ── DOWNLOADS ─────────────────────────────────────────────────
+    _render_downloads(res, user)
+
+
+def _render_shap(res):
+    """
+    §7.3 item 5. The caption is "Contributions for this patient", not "Top Risk
+    Factors" — the old caption made a claim the old chart could not support, because
+    the old chart was a global feature ranking identical for every patient.
+    """
+    uic.section("Contributions for this patient")
+    if res.get("shap") is None:
+        uic.alert("info", "Explanation unavailable",
+                  "SHAP could not be computed for this model"
+                  + (f" ({res['shap_error']})." if res.get("shap_error") else "."))
+        return
+    vals, base = res["shap"]
+    fig = cu.waterfall_figure(vals, base, _feature_names(),
+                              res["features"], res["final_prob"])
+    ucharts.render(fig)
+    st.markdown(
+        '<p class="hg-note">Bars are contributions in log-odds, the model\'s native '
+        'output space. They do not sum to the probability above, and they are not '
+        'causal — they describe how this model reached this number for these '
+        'inputs.</p>', unsafe_allow_html=True)
+    st.markdown(ud.explainer_disclosure(res["used_label"], res["explainer"] or "",
+                                        res["explainer_surrogate"]),
+                unsafe_allow_html=True)
+
+
+def _render_counterfactuals(res):
+    """§7.3 item 6. Routed through the monotonic XGBoost — see _explain."""
+    uic.section("What would change this score")
+    if res.get("cf_model") is None:
+        uic.alert("info", "Simulation unavailable",
+                  "The monotonically constrained model is not loaded. Simulation is "
+                  "not run on the ensemble, because an unconstrained member can make "
+                  "a protective change register as increased risk.")
+        return
+    rows = res.get("counterfactuals")
+    if not rows:
+        uic.alert("info", "No applicable interventions",
+                  "None of the standard interventions apply to this patient — "
+                  "proposing a change they cannot make is noise.")
+        return
+    st.markdown(ud.counterfactual_panel(rows, res["final_prob"],
+                                        res["threshold"], res["cf_model"]),
+                unsafe_allow_html=True)
+
+
+def _render_downloads(res, user):
+    txt = _text_report(res, user)
+    a, b = st.columns(2)
+    stamp = datetime.now().strftime('%Y%m%d%H%M%S')
+    with a:
+        st.download_button("Download report (.txt)", txt,
+                           file_name=f"heartguard_{res['p_id']}_{stamp}.txt",
+                           mime="text/plain", use_container_width=True,
+                           key="diag_dl_txt")
+    with b:
+        pdf, pdf_error = _pdf_report(res, user)
+        if pdf is None:
+            # Named, not swallowed. The first version of this returned a bare None on
+            # any exception and rendered a disabled button, which hid two real key
+            # mismatches against build_pdf_report's contract for an entire test cycle.
+            st.button("Download report (PDF)", disabled=True,
+                      use_container_width=True, key="diag_dl_pdf_off",
+                      help=f"PDF generation failed: {pdf_error}")
+        else:
+            st.download_button("Download report (PDF)", pdf,
+                               file_name=f"heartguard_{res['p_id']}_{stamp}.pdf",
+                               mime="application/pdf", use_container_width=True,
+                               key="diag_dl_pdf")
+
+
+def _pdf_report(res, user):
+    """
+    The multi-page clinical PDF from Run 7, wired to the UI for the first time.
+
+    The waterfall figure is rebuilt here rather than reused from the screen render:
+    ui.charts.render closes every figure it draws, deliberately, because Streamlit
+    reruns per keystroke and matplotlib keeps unclosed figures in a global registry.
+
+    Returns (bytes_or_None, error_string). The key names below are build_pdf_report's,
+    not this page's — `percentile['pct']` and `operating['band']` in particular — and
+    getting either wrong produces a KeyError that a bare `except` turns into a
+    permanently disabled button with no explanation. It did, for one test cycle.
+
+    `_or_zero` exists because the report formats every rate with `:.1%`, and dict.get
+    with a default returns None rather than the default when the key is PRESENT and
+    None — which it is for any model whose threshold profile lacks NPV.
+    """
+    def _or_zero(v):
+        return 0.0 if v is None else v
+
+    try:
+        sr = res["sub_rel"] or {}
+        src = sr or res["thr_meta"] or {}
+        wf = None
+        if res.get("shap") is not None:
+            vals, base = res["shap"]
+            wf = cu.waterfall_figure(vals, base, _feature_names(),
+                                     res["features"], res["final_prob"])
+        pdf = cu.build_pdf_report(
+            meta={"patient_id": res["p_id"], "patient_name": res["p_name"],
+                  "prepared_by": f"{user['fullname']} ({user['role']})",
+                  "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                  "model": res["used_label"],
+                  "model_version": res["version"]["version"],
+                  "manifest_sha": res["version"]["manifest_sha"],
+                  "notes": res["notes"] or "None"},
+            indicators=res["inputs"],
+            prediction={"probability": res["final_prob"],
+                        "band": res["band_label"],
+                        "action": res["band_action"],
+                        "extrapolated": res["extrapolated"],
+                        "applicability": res["app_warn"]},
+            operating={"threshold": res["threshold"],
+                       "band": res["age_band"],
+                       "sensitivity": _or_zero(src.get("sensitivity")),
+                       "specificity": _or_zero(src.get("specificity")),
+                       "ppv": _or_zero(src.get("ppv")),
+                       "npv": _or_zero(src.get("npv"))},
+            reliability={"auc": _or_zero(sr.get("auc")),
+                         "auc_ci_low": sr.get("auc_ci_low"),
+                         "auc_ci_high": sr.get("auc_ci_high"),
+                         "calibration_gap": _or_zero(sr.get("calibration_gap")),
+                         "n": sr.get("n") or 0} if sr else None,
+            waterfall_fig=wf,
+            counterfactuals=res.get("counterfactuals"),
+            percentile=(None if res["extrapolated"] or res["percentile"] is None
+                        else {"pct": res["percentile"], "label": res["pct_label"],
+                              "n": res["pct_n"]}))
+        if wf is not None:
+            plt.close(wf)
+        return pdf, None
+    except Exception as exc:
+        return None, f"{type(exc).__name__}: {exc}"
+
+
+def _text_report(res, user):
+    """
+    The plain-text report, preserved. Every clinical sentence in it is unchanged from
+    Run 7 — this is a record a clinician may already have filed, and rewording it
+    would make two archived reports of the same assessment disagree.
+    """
+    i = res["inputs"]
+    src = res["sub_rel"] or res["thr_meta"] or {}
+    sr = res["sub_rel"] or {}
+    chol_label = fe.CHOLESTEROL_LABELS.get(i["cholesterol"], str(i["cholesterol"]))
+    gluc_label = fe.GLUCOSE_LABELS.get(i["gluc"], str(i["gluc"]))
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    warn = ""
+    if res["extrapolated"]:
+        warn = ("*** WARNING - OUTSIDE MODEL APPLICABILITY ***\n"
+                + "\n".join(
+                    f"  {w['label']} = {w['value']:g} (model fitted on "
+                    f"{w['supported'][0]:g}-{w['supported'][1]:g})"
+                    for w in res["app_warn"] if w['severity'] == 'hard')
+                + "\nThis risk estimate is an EXTRAPOLATION beyond the population the "
+                  "model\nwas trained on. It has NOT been validated for this patient "
+                  "and must not\nbe relied upon for a clinical decision. Peer "
+                  "comparison was withheld.\n")
+    peer = (f"higher than {res['percentile']}% of patients ({res['pct_label']})"
+            if res["percentile"] is not None else "withheld (outside applicability)")
+    ci = (f" (95% CI {sr['auc_ci_low']:.3f}-{sr['auc_ci_high']:.3f})"
+          if sr.get("auc_ci_low") is not None else "")
+    return f"""==================================================
 HEARTGUARD AI - PATIENT RISK ASSESSMENT REPORT
 ==================================================
 Date/Time  : {ts}
 Prepared By: {user['fullname']} ({user['role']})
-Patient ID : {p_id}
-Patient    : {p_name}
+Patient ID : {res['p_id']}
+Patient    : {res['p_name']}
 
 CLINICAL INDICATORS:
 --------------------
-Age        : {age} years
-Gender     : {'Male' if gender == 1 else 'Female'}
-Height     : {height} cm
-Weight     : {weight} kg
-Systolic BP: {ap_hi} mmHg
-Diastolic BP: {ap_lo} mmHg
+Age        : {i['age']} years
+Gender     : {'Male' if i['gender'] == 1 else 'Female'}
+Height     : {i['height']} cm
+Weight     : {i['weight']} kg
+Systolic BP: {i['ap_hi']} mmHg
+Diastolic BP: {i['ap_lo']} mmHg
 Cholesterol: {chol_label}
 Glucose    : {gluc_label}
-Smoker     : {'Yes' if smoke else 'No'}
-Alcohol Use: {'Yes' if alco else 'No'}
-Physically Active: {'Yes' if active else 'No'}
+Smoker     : {'Yes' if i['smoke'] else 'No'}
+Alcohol Use: {'Yes' if i['alco'] else 'No'}
+Physically Active: {'Yes' if i['active'] else 'No'}
 
 AI PREDICTION:
 --------------
-Model Used      : {used_label}
-Model Version   : {_ver['version']} (dataset {_ver['manifest_sha']})
-Risk Probability: {final_prob:.2%}
-Risk Band       : {band_label}{' [EXTRAPOLATED]' if _extrapolated else ''}
-Recommendation  : {band_action}
-Peer Comparison : {f'higher than {_pct}% of patients ({_pct_label})' if _pct else 'withheld (outside applicability)'}
+Model Used      : {res['used_label']}
+Model Version   : {res['version']['version']} (dataset {res['version']['manifest_sha']})
+Risk Probability: {res['final_prob']:.2%}
+Risk Band       : {res['band_label']}{' [EXTRAPOLATED]' if res['extrapolated'] else ''}
+Recommendation  : {res['band_action']}
+Peer Comparison : {peer}
 
-{'''*** WARNING - OUTSIDE MODEL APPLICABILITY ***
-''' + chr(10).join(
-    f"  {w['label']} = {w['value']:g} (model fitted on "
-    f"{w['supported'][0]:g}-{w['supported'][1]:g})"
-    for w in _app_warn if w['severity'] == 'hard') + '''
-This risk estimate is an EXTRAPOLATION beyond the population the model
-was trained on. It has NOT been validated for this patient and must not
-be relied upon for a clinical decision. Peer comparison was withheld.
-''' if _extrapolated else ''}OPERATING POINT (age-stratified):
+{warn}OPERATING POINT (age-stratified):
 ---------------------------------
-Age band           : {_age_band}
-Decision threshold : {risk_threshold:.3f}
-Sensitivity        : {(_sub_rel or _thr_meta).get('sensitivity', 0):.1%}
-Specificity        : {(_sub_rel or _thr_meta).get('specificity', 0):.1%}
-PPV / NPV          : {(_sub_rel or _thr_meta).get('ppv', 0):.1%} / {(_sub_rel or _thr_meta).get('npv', 0):.1%}
+Age band           : {res['age_band']}
+Decision threshold : {res['threshold']:.3f}
+Sensitivity        : {src.get('sensitivity', 0):.1%}
+Specificity        : {src.get('specificity', 0):.1%}
+PPV / NPV          : {src.get('ppv', 0):.1%} / {src.get('npv', 0):.1%}
 
 MODEL RELIABILITY FOR THIS PATIENT GROUP:
 -----------------------------------------
-Discrimination     : AUC {(_sub_rel or {}).get('auc', 0):.3f}{
-    f" (95% CI {_sub_rel['auc_ci_low']:.3f}-{_sub_rel['auc_ci_high']:.3f})"
-    if _sub_rel and _sub_rel.get('auc_ci_low') is not None else ""}
-Calibration gap    : {(_sub_rel or {}).get('calibration_gap', 0):+.3f}
-Measured on        : {(_sub_rel or {}).get('n', 0):,} held-out patients
+Discrimination     : AUC {sr.get('auc', 0):.3f}{ci}
+Calibration gap    : {sr.get('calibration_gap', 0):+.3f}
+Measured on        : {sr.get('n', 0):,} held-out patients
 
 The threshold is stratified by age because baseline cardiovascular risk rises
 steeply with age; a single cut-point would under-screen younger patients and
@@ -1085,22 +1286,35 @@ This threshold is tuned for SCREENING sensitivity, not diagnostic accuracy.
 It deliberately flags more patients for follow-up in order to reduce missed
 cases. A positive result indicates the need for further testing, not disease.
 
-Notes: {notes or 'None'}
+Notes: {res['notes'] or 'None'}
 
 DISCLAIMER: This report is AI-generated for clinical support only.
 Final diagnosis must be confirmed by a licensed medical professional.
 =================================================="""
-            st.download_button("Download Report", report,
-                               file_name=f"heartguard_report_{datetime.now().strftime('%Y%m%d%H%M%S')}.txt",
-                               mime="text/plain", use_container_width=True)
-        else:
-            st.markdown("""
-            <div class="alert-info">
-            Fill in the patient clinical indicators on the left panel and click
-            <b>Generate Risk Assessment</b> to run the AI prediction.
-            </div>""", unsafe_allow_html=True)
-            st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/4/41/Simple_human_heart_icon.svg/200px-Simple_human_heart_icon.svg.png",
-                     width=120)
+
+
+def _band_edges(model_label):
+    """The three band cut-points for the rail, from thresholds.json."""
+    rb = (load_thresholds().get("models", {}).get(model_label, {})
+          .get("risk_bands", {}))
+    return (rb.get("low_max", 0.25), rb.get("borderline_max", 0.35),
+            rb.get("intermediate_max", 0.65))
+
+
+def _band_key(band_label):
+    lab = (band_label or "").lower()
+    for key in ("borderline", "intermediate", "high", "low"):
+        if key in lab:
+            return key
+    return "low"
+
+
+def _target_sensitivity():
+    return load_thresholds().get("policy", {}).get("target_sensitivity", 0.85)
+
+
+def _overall_auc(model_label):
+    return (load_results(include_virtual=True).get(model_label, {}) or {}).get("auc")
 
 
 # ══════════════════════════════════════════════════════════════════

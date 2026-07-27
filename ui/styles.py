@@ -37,6 +37,8 @@ reset, chrome, widgets, components, utilities, responsive, reduced-motion.
 
 from __future__ import annotations
 
+import re
+
 import streamlit as st
 
 from . import tokens as T
@@ -873,6 +875,154 @@ def _components_block() -> str:
 """
 
 
+# ════════════════════════════════════════════════════════════════════════
+# 5c. Diagnosis (§7.3)
+# ════════════════════════════════════════════════════════════════════════
+def _diagnosis_block() -> str:
+    """
+    Counterfactual table, model breakdown, peer slot, applicability rails.
+
+    All four are row-grid layouts rather than tables. `st.dataframe` cannot carry the
+    per-row semantics these need — a negligible counterfactual has to render with no
+    direction at all, which a dataframe column cannot express — and a real <table>
+    inside `unsafe_allow_html` would need its own escaping discipline for every cell.
+    """
+    return f"""
+/* ── applicability rails ──────────────────────────────────────────── */
+.hg-applic {{ margin-top: var(--hg-space-3); }}
+.hg-applic .hg-rail-row {{ padding: var(--hg-space-2) 0; }}
+.hg-applic .hg-rail-row + .hg-rail-row {{ border-top: 1px solid var(--hg-hairline); }}
+
+/* ── counterfactuals ──────────────────────────────────────────────── */
+.hg-cf {{ margin-top: var(--hg-space-3); }}
+.hg-cf__head,
+.hg-cf__row {{
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 62px 62px minmax(0, 1.1fr);
+  gap: var(--hg-space-3);
+  align-items: baseline;
+  padding: 7px 0;
+}}
+.hg-cf__head {{
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: var(--hg-track-eyebrow);
+  color: var(--hg-text-subtle);
+  border-bottom: 1px solid var(--hg-border);
+}}
+.hg-cf__row + .hg-cf__row {{ border-top: 1px solid var(--hg-hairline); }}
+.hg-cf__name {{ font-size: 13px; color: var(--hg-text); }}
+.hg-cf__new,
+.hg-cf__delta {{
+  font-family: var(--hg-font-mono);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: var(--hg-text);
+}}
+/* A negligible row shows no direction — the engine classified it as noise, and a
+   signed delta beside it would read as a small reason to act. */
+.hg-cf__delta--none {{ color: var(--hg-text-disabled); }}
+.hg-cf__note {{ font-size: 11.5px; color: var(--hg-text-muted); }}
+.hg-cf--benefit .hg-cf__delta {{ color: var(--hg-risk-low-text); }}
+.hg-cf--benefit .hg-cf__name {{ font-weight: 500; }}
+.hg-cf--para .hg-cf__delta,
+.hg-cf--para .hg-cf__note {{ color: var(--hg-hazard-text); }}
+.hg-cf--none .hg-cf__name {{ color: var(--hg-text-muted); }}
+.hg-cf__cross {{
+  display: block;
+  margin-top: 2px;
+  font-weight: 600;
+  color: var(--hg-risk-low-text);
+}}
+.hg-cf__foot {{
+  margin: var(--hg-space-4) 0 0;
+  font-size: 11.5px;
+  line-height: 1.65;
+  color: var(--hg-text-subtle);
+}}
+.hg-cf__foot--warn {{ color: var(--hg-hazard-text); }}
+
+/* ── model breakdown ──────────────────────────────────────────────── */
+.hg-mb {{ margin-top: var(--hg-space-3); }}
+.hg-mb__row {{
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) 58px 66px minmax(0, 96px);
+  gap: var(--hg-space-3);
+  align-items: center;
+  padding: 6px 0;
+  font-size: 12.5px;
+}}
+.hg-mb__row + .hg-mb__row {{ border-top: 1px solid var(--hg-hairline); }}
+.hg-mb__dot {{ width: 8px; height: 8px; border-radius: var(--hg-radius-pill); }}
+.hg-mb__name {{ color: var(--hg-text); }}
+.hg-mb__p {{
+  font-family: var(--hg-font-mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: var(--hg-text);
+}}
+.hg-mb__thr,
+.hg-mb__v {{ font-size: 11px; color: var(--hg-text-subtle); }}
+.hg-mb__thr {{ font-family: var(--hg-font-mono); text-align: right; }}
+.hg-mb__v.is-flag {{ color: var(--hg-risk-high-text); font-weight: 600; }}
+
+/* ── peer percentile ──────────────────────────────────────────────── */
+.hg-peer {{
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: var(--hg-space-4);
+  border: 1px solid var(--hg-border);
+  border-radius: var(--hg-radius-md);
+  background: var(--hg-sunken);
+}}
+.hg-peer__k {{
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: var(--hg-track-eyebrow);
+  color: var(--hg-text-subtle);
+}}
+.hg-peer__v {{ font-size: 13.5px; color: var(--hg-text); }}
+.hg-peer__n {{ font-size: 11.5px; color: var(--hg-text-muted); }}
+/* An empty slot WITH A REASON, which §7.3 prefers to a number that lies. */
+.hg-peer--void .hg-peer__v {{ color: var(--hg-text-muted); font-style: italic; }}
+
+/* ── shared note ──────────────────────────────────────────────────── */
+.hg-note {{
+  margin: var(--hg-space-3) 0 0;
+  font-size: 11.5px;
+  line-height: 1.65;
+  color: var(--hg-text-subtle);
+}}
+
+/* ── result identity strip ────────────────────────────────────────── */
+.hg-result-id {{
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--hg-space-2) var(--hg-space-4);
+  padding-bottom: var(--hg-space-3);
+  margin-bottom: var(--hg-space-4);
+  border-bottom: 1px solid var(--hg-border);
+}}
+
+/* ── result column ────────────────────────────────────────────────── */
+/* Vertical rhythm for the strict priority stack. The extrapolation banner keeps a
+   larger gap beneath it so nothing appears to belong to it. */
+.st-key-diag-result > div > div > div {{ margin-bottom: var(--hg-space-5); }}
+
+@media (max-width: 1100px) {{
+  .hg-cf__head,
+  .hg-cf__row {{ grid-template-columns: minmax(0, 1fr) 58px 58px; }}
+  .hg-cf__note {{ grid-column: 1 / -1; margin-top: -4px; }}
+  .hg-mb__row {{ grid-template-columns: 8px minmax(0, 1fr) 54px 62px; }}
+  .hg-mb__v {{ grid-column: 2 / -1; }}
+}}
+"""
+
+
 def _legacy_block() -> str:
     """
     Back-compatible rules for the 24 pre-redesign classes.
@@ -979,34 +1129,16 @@ def _legacy_block() -> str:
   color: var(--hg-primary);
   border-color: var(--hg-primary-border);
 }}
-.user-card {{
-  background: var(--hg-sunken);
-  border: 1px solid var(--hg-border);
-  border-radius: var(--hg-radius-lg);
-  padding: var(--hg-space-4);
-  margin-bottom: var(--hg-space-5);
-}}
-.res-risk, .res-safe {{
-  border-radius: var(--hg-radius-lg);
-  padding: var(--hg-space-6);
-  border: 1px solid;
-}}
-.res-risk {{
-  background: var(--hg-risk-high-surface);
-  border-color: var(--hg-risk-high-border);
-}}
-.res-safe {{
-  background: var(--hg-risk-low-surface);
-  border-color: var(--hg-risk-low-border);
-}}
-.res-title {{
-  font-family: var(--hg-font-display);
-  font-size: 20px;
-  font-weight: {T.WEIGHT['semibold']};
-  letter-spacing: var(--hg-track-base);
-}}
-.res-prob {{ font-size: 14px; color: var(--hg-text); margin-top: var(--hg-space-2); }}
-.res-note {{ font-size: 12.5px; color: var(--hg-text-muted); margin-top: var(--hg-space-3); line-height: 1.6; }}
+/* REMOVED in Phase 6, measured not guessed: .res-risk / .res-safe / .res-title /
+   .res-prob / .res-note / .user-card. Phase 6 replaced the diagnosis result panel with
+   risk_verdict + operating_point + reliability_panel and the sidebar user card with
+   sidebar_nav, so nothing references them in app.py or pages_ext.py any more.
+
+   The first attempt to find dead rules here reported ZERO, because it searched a
+   concatenation that included styles.py and tried to exclude this block by
+   `src.replace(_legacy_block(), "")` — which never matched, since _legacy_block()
+   returns CSS with the f-string tokens already substituted. Every class matched its
+   own rule. The search must exclude styles.py by file, not by string. */
 """
 
 
@@ -1237,8 +1369,14 @@ def _tail_block() -> str:
 }
 
 /* ── forced colors ────────────────────────────────────────────────── */
+/* In forced-colors mode the OS replaces every colour, so any surface whose boundary
+   was carried by background alone becomes invisible. These need an explicit border.
+   Updated in Phase 6: .user-card / .res-risk / .res-safe were removed, and the
+   components that replaced them are listed instead. */
 @media (forced-colors: active) {
-  .panel, .kpi-wrap, .user-card, .res-risk, .res-safe { border: 1px solid CanvasText; }
+  .panel, .kpi-wrap, .hg-panel, .hg-verdict, .hg-alert, .hg-peer, .hg-stat,
+  .hg-op, .hg-rel { border: 1px solid CanvasText; }
+  .hg-rail__track, .hg-rail__fill { forced-color-adjust: none; }
 }
 
 /* ── print ────────────────────────────────────────────────────────── */
@@ -1252,16 +1390,39 @@ def _tail_block() -> str:
 # ════════════════════════════════════════════════════════════════════════
 # Assembly
 # ════════════════════════════════════════════════════════════════════════
+def _minify(css: str) -> str:
+    """
+    Strip CSS comments and collapsed blank runs from the SHIPPED sheet.
+
+    The blocks above are heavily commented on purpose — the reasoning is why the next
+    person can change a rule without breaking the cascade. But that reasoning was
+    measured at 12.0 KB, 21% of a 58.4 KB stylesheet, and none of it means anything to
+    a browser. Keep it in the source, drop it from the payload.
+
+    THE GUARD MATTERS MORE THAN THE SAVING. A regex that eats `/* … */` across 46 KB of
+    generated CSS could in principle chew through a `url("data:image/svg+xml,…")`
+    payload and silently produce a sheet that parses but renders wrong — the worst
+    possible failure, because nothing raises. So the stripped sheet is only returned if
+    it still balances its braces and still carries every data URI. Otherwise the
+    commented original ships, 12 KB heavier and definitely correct.
+    """
+    out = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+    out = re.sub(r"\n[ \t]*\n+", "\n", out)
+    balanced = out.count("{") == out.count("}") == css.count("{")
+    uris_intact = out.count("data:image") == css.count("data:image")
+    return out if (balanced and uris_intact) else css
+
+
 @st.cache_resource(show_spinner=False)
 def stylesheet() -> str:
     """
     The complete stylesheet, assembled once per process.
 
     Cascade order is fixed and must not be rearranged (see module docstring). The
-    @import MUST be the first rule or browsers drop it silently.
+    @import MUST be the first rule or browsers drop it silently — which is also why it
+    is prepended AFTER minification, so nothing can shift it out of first position.
     """
-    return "\n".join([
-        f"@import url('{T.FONT_IMPORT}');",
+    body = _minify("\n".join([
         _tokens_block(),
         _base_block(),
         _chrome_block(),
@@ -1270,9 +1431,11 @@ def stylesheet() -> str:
         _rail_block(),
         _components_block(),
         _login_block(),
+        _diagnosis_block(),
         _legacy_block(),
         _tail_block(),
-    ])
+    ]))
+    return f"@import url('{T.FONT_IMPORT}');\n{body}"
 
 
 def active_theme() -> str:

@@ -1638,3 +1638,212 @@ from 11 tabs to 4 segmented groups, and the admin pages with the final accessibi
 responsive and print passes.
 
 Everything listed in Run 8 §8.4 is still outstanding and unchanged.
+
+---
+
+# RUN 10 — Frontend redesign, Phase 6: the diagnosis page (2026-07-27)
+
+The highest-stakes screen in the application. Rebuilt against §7.3, and the three
+engines built in Run 7 but never wired — per-patient SHAP, the counterfactual
+simulator, the PDF report — are now reachable from the UI for the first time.
+
+## 10.1 — Three structural changes, each with a reason
+
+**The inputs left `st.form`.** §7.3 requires the applicability rails to show "the
+patient's current value as a live marker" so a clinician sees they are about to
+extrapolate *before* submitting. A form withholds its widget values until submit, which
+would draw every marker at its default position while the fields above showed something
+the clinician had already changed. A marker that disagrees with its own field is worse
+than no marker at all.
+
+**The result therefore moved into session state.** Without a form, every keystroke
+reruns the script, and a result rendered inline would vanish the moment the clinician
+touched a field to compare. Scoring and the database write still happen **only** inside
+the submit branch, so the one-row-per-submit contract is unchanged — and there is now a
+test that edits two inputs after a submit and asserts no second row appears.
+
+**That change created a hazard, which needed its own fix.** A persisted result stays on
+screen while the clinician starts entering the *next* patient — so the verdict beside
+the form could belong to someone else. The result now opens with an identity strip
+carrying the patient code, name and model version. It is not decoration; it is what
+makes the persistence safe.
+
+## 10.2 — The result stack, in the order §7.3 fixes
+
+1. **Extrapolation banner** — full width, above everything, never collapsed, never
+   dismissible. A probability rendered at 64px is authoritative-looking whether or not
+   the model has ever seen a patient like this one, and the only defence is that the
+   caveat is read first. The test asserts the banner's index in the document is *lower*
+   than the verdict's, not merely that both exist.
+2. **`risk_verdict`** — probability, band chip beside it, the full Reference Rail
+   beneath, eyebrow reading "Screening result".
+3. **`operating_point`** — threshold, sensitivity, specificity, PPV, and a sentence
+   naming the source: derived for this age band from out-of-fold predictions.
+4. **`reliability_panel`** — band AUC with CI on a rail, calibration gap, holdout n,
+   Strong/Moderate/Limited as text. The low-reliability caution keeps its exact Run 5
+   wording.
+5. **Per-patient SHAP waterfall** — replaces the global `feature_importances_` chart
+   entirely.
+6. **Counterfactual panel** — routed through the monotonic XGBoost.
+7. **Peer percentile**, or an empty slot with a reason.
+8. **Downloads** — `.txt` and PDF, side by side.
+
+## 10.3 — Why the global importance chart had to go
+
+It was a static, model-level ranking — **identical for every patient** — captioned
+"Top Risk Factors" and placed directly beneath that patient's score. It read as
+personalised reasoning while containing none. The caption is now "Contributions for
+this patient", which is a claim the SHAP waterfall can actually support.
+
+Three disclosures ship with it, because a waterfall invites over-reading:
+
+- bars are in **log-odds**, the model's native output space, and the copy says they do
+  not sum to the probability above;
+- they are explicitly **not causal**;
+- when the explainer is a **surrogate** — it is, for the ensemble and for SVM — the
+  panel names the substitute model. A waterfall captioned as this patient's reasoning,
+  computed on a different estimator than produced the number above it, is a quiet lie.
+
+## 10.4 — Why counterfactuals route through XGBoost and not the ensemble
+
+Not a preference. XGBoost carries `monotone_constraints`, so a change in a protective
+direction **cannot** raise its predicted risk. Averaging it with unconstrained members
+reintroduces exactly the paradoxical rows the constraint exists to prevent — and the
+panel would then report "lower your blood pressure" as an increase in risk.
+
+If the constrained model is unavailable, the panel says so and simulates nothing.
+Falling back to the ensemble would make a real model limitation indistinguishable from
+an artifact of averaging.
+
+Three presentation rules enforce what the engine already decided:
+
+- a **negligible** row renders with no direction and no arrow — the engine classifies
+  anything under its noise floor as immaterial, and a signed −0.3% beside it would read
+  as a small reason to act;
+- a **paradoxical** row is labelled a model limitation, never a recommendation;
+- crossing the action threshold is called out explicitly, because that — not the size
+  of the delta — is what changes the clinical decision.
+
+## 10.5 — `ui/charts.py`
+
+Built here rather than in Phase 7 because the SHAP waterfall needs it. Its contract is
+one line: **a CSS colour string must never leave this module.** `T.MPL` holds 6-digit
+hexes only, a test asserts it, and `palette()` is the only sanctioned way to obtain a
+chart colour.
+
+Two decisions recorded:
+
+- **Figures are themed at construction, not via `rcParams`.** `plt.rcParams` is
+  process-global and Streamlit reruns the script per interaction, so a page that mutated
+  it would leak its styling into every other page's figures in an order-dependent way.
+- **`render()` closes every figure it draws.** matplotlib keeps unclosed figures in a
+  global registry; a page that leaks one per rerun leaks one per keystroke.
+
+## 10.6 — Bugs found and fixed during the phase
+
+**The PDF button was silently disabled for an entire test cycle.** `_pdf_report` had a
+bare `except Exception: return None`, and behind it sat two real contract mismatches
+against `build_pdf_report`: it wants `percentile['pct']` and `operating['band']`, and
+was being handed `percentile['percentile']` and `operating['age_band']`. A third latent
+fault was `dict.get(k, 0)` returning `None` rather than the default for keys that are
+*present and None* — which they are for any model whose threshold profile lacks NPV,
+and every rate in the report is formatted with `:.1%`. The function now returns
+`(bytes, error)` and the disabled button names the reason.
+
+**The old empty state hotlinked a Wikimedia PNG.** It breaks on any machine without
+internet and violates the vendor-don't-hotlink rule. Replaced with `empty_state`.
+
+**A test-harness trap worth recording.** `import app` executes the page body in a bare
+Streamlit context, which leaves the container stack pointing inside a container that
+never closed. Every `AppTest` run afterwards fails with *"st.button() can't be used in
+an st.form()"* — an error that looks exactly like a product bug and is not one. The
+suite now completes all AppTest interaction before importing `app` for the report
+generators, with the reason recorded at the import.
+
+**My own test filter invalidated most of the suite, twice.** The stylesheet is emitted
+as markdown and defines a rule for every class the tests search for, so any filter that
+lets it through turns `"hg-peer--void" in md` into a constant `True`. Filtering on
+`--hg-` was worse: it also dropped every component carrying an inline custom property,
+including the verdict. Nine assertions were reporting on the stylesheet rather than the
+page.
+
+**A dead-CSS search that reported zero, wrongly.** It excluded the legacy block by
+`src.replace(_legacy_block(), "")` — which never matched, because `_legacy_block()`
+returns CSS with the f-string tokens already substituted. Every class matched its own
+rule. Excluding styles.py *by file* found six genuinely dead rules.
+
+## 10.7 — The CSS budget, solved structurally
+
+The sheet reached 58.5 KB of a 60 KB budget with four phases left. Measurement found
+**12.0 KB — 21% of the stylesheet — was comments.** Those comments are why the next
+person can change a rule without breaking the cascade, and they are worthless to a
+browser. `stylesheet()` now strips them at assembly: the reasoning stays in the source,
+the payload does not carry it.
+
+The guard matters more than the saving. A regex eating `/* … */` across 46 KB of
+generated CSS could in principle chew through a `url("data:image/svg+xml,…")` payload
+and produce a sheet that parses but renders wrong — the worst failure mode, because
+nothing raises. The stripped sheet is returned only if it still balances its braces and
+still carries all 18 data URIs; otherwise the commented original ships, heavier and
+definitely correct.
+
+```
+source (commented)   58.6 KB
+shipped              46.3 KB / 60 KB      13.7 KB headroom
+```
+
+## 10.8 — Phase 6 gate
+
+```
+27-path AppTest         27/27 routed, 0 exceptions
+py_compile              clean on 13 modules
+pyflakes                no new warnings vs baseline
+test_tokens             0 failures   (63 assertions)
+test_brand              0 failures   (60)
+test_rail               0 failures   (71)
+test_components         0 failures   (95)
+test_login              0 failures   (68)
+test_diagnosis          0 failures   (76)
+CSS budget              46.3 KB / 60 KB   emotion-cache selectors: 0
+screenshots             SUBSTITUTED — see 9.0
+```
+
+**The extra gate §7.3 demands — the five OOD scenarios re-asserted on database
+contents, not rendered strings:**
+
+```
+82yo above age support        extrapolated=1  notes recorded  ver+thr+band stamped  linked
+19yo below age support        extrapolated=1  notes recorded  ver+thr+band stamped  linked
+55yo BP 245/195               extrapolated=1  notes recorded  ver+thr+band stamped  linked
+52yo fully supported          extrapolated=0                  ver+thr+band stamped  linked
+64yo near p99                 extrapolated=0                  ver+thr+band stamped  linked
+```
+
+This is the assertion that matters. The Run 7 verification of BUG-23 checked only UI
+text and **passed** while the `extrapolated` flag was being discarded before the INSERT.
+A test that checks what the user sees is not a test that the system recorded it.
+
+## 10.9 — Preserved exactly
+
+Physiology refusal before scoring (BUG-26), the applicability check before rendering
+(BUG-23), shared feature engineering (BUG-05), one decision rule for both paths
+(BUG-18), per-model age-stratified operating points (Run 5), the 0-indexed cholesterol
+and glucose encoding (BUG-04), patient linking that cannot lose the assessment
+(BUG-24), peer-percentile suppression under extrapolation, and every clinical sentence
+in the plain-text report — that report is a record a clinician may already have filed,
+and rewording it would make two archived copies of the same assessment disagree.
+
+## 10.10 — Carried forward
+
+Phases 7–10: retheme the remaining matplotlib call sites onto `ui/charts.py`,
+dashboards and history, the Model Performance IA restructure from 11 tabs to 4
+segmented groups, and the admin pages with the final accessibility, responsive and
+print passes.
+
+Two items noted but deliberately not acted on, both outside a presentation phase's
+remit:
+
+- `register_user` performs no character validation on usernames. Defended in depth —
+  every render site passes through `esc()` — but the input validation is absent.
+- `use_container_width` is deprecated in favour of `width='stretch'` and is used
+  throughout. A global sweep belongs in Phase 10, not scattered across six phases.
