@@ -990,6 +990,41 @@ def _diagnosis_block() -> str:
 /* An empty slot WITH A REASON, which §7.3 prefers to a number that lies. */
 .hg-peer--void .hg-peer__v {{ color: var(--hg-text-muted); font-style: italic; }}
 
+/* ── danger zone (§7.6) ───────────────────────────────────────────── */
+/* A hairline border, never a red fill. Red fills desensitise: a user who sees a red
+   block every time they open Activity Logs stops seeing it by the third visit. The
+   border plus typed confirmation is what actually prevents accidents. */
+.st-key-hg-danger-zone {{
+  border: 1px solid var(--hg-danger-border);
+  border-radius: var(--hg-radius-lg);
+  padding: var(--hg-space-5);
+  margin-top: var(--hg-space-6);
+  background: var(--hg-surface);
+}}
+.hg-danger__head {{
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: var(--hg-track-eyebrow);
+  color: var(--hg-danger-text);
+}}
+.hg-danger__body {{
+  margin: var(--hg-space-2) 0 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--hg-text-muted);
+}}
+/* Destructive controls read as secondary, never as the page's primary action. */
+.st-key-hg-danger-zone .stButton button {{
+  border-color: var(--hg-danger-border);
+  color: var(--hg-danger-text);
+  background: transparent;
+}}
+.st-key-hg-danger-zone .stButton button:hover {{
+  background: var(--hg-danger-surface);
+  border-color: var(--hg-danger-text);
+}}
+
 /* ── shared note ──────────────────────────────────────────────────── */
 .hg-note {{
   margin: var(--hg-space-3) 0 0;
@@ -1025,97 +1060,58 @@ def _diagnosis_block() -> str:
 
 def _legacy_block() -> str:
     """
-    Back-compatible rules for the 24 pre-redesign classes.
+    What remains of the pre-redesign class shim.
 
-    Recon counted 111 usages of these across 116 `unsafe_allow_html` blocks. Rewriting
-    every call site in one step would make an AppTest failure impossible to attribute,
-    so the old class names keep working — restyled onto the new tokens — and each page
-    migrates to the component library in its own phase. This block shrinks to nothing
-    by Phase 10.
+    It began at 24 classes with 111 usages across 116 `unsafe_allow_html` blocks.
+    Rewriting them all in one step would have made any AppTest failure impossible to
+    attribute, so each page migrated in its own phase and the shim shrank behind it:
+
+        Phase 2   24 classes
+        Phase 6   18   (.res-* and .user-card gone with the diagnosis rebuild)
+        Phase 10   8   (.kpi-* and .hg-title/.hg-subtitle/.hg-divider gone)
+
+    The eight left are genuinely still referenced by the admin and management pages,
+    measured by searching the page modules BY FILE — not by string-excluding this
+    block, which never matches because the f-string tokens are already substituted here.
+    That mistake made the first two dead-rule searches report zero.
+
+    `.panel` and `.alert-*` are the honest remainder: they are used by admin pages that
+    Phase 10 restyled but did not rebuild, which is the correct scope call — rebuilding
+    six more CRUD pages was not in this redesign's brief.
     """
     return f"""
-/* ── legacy shim (removed progressively, Phases 2-10) ─────────────── */
-.hg-title {{
-  font-family: var(--hg-font-display);
-  font-size: 24px;
-  font-weight: {T.WEIGHT['semibold']};
-  letter-spacing: var(--hg-track-tight);
-  color: var(--hg-text-heading);
-  margin: 0 0 2px 0;
-}}
-.hg-subtitle {{
-  font-size: 13px;
-  color: var(--hg-text-muted);
-  margin: 0 0 var(--hg-space-4) 0;
-}}
-.hg-divider {{
-  border: 0;
-  border-top: 1px solid var(--hg-border);
-  margin: var(--hg-space-4) 0 var(--hg-space-6) 0;
-}}
-.panel {{
+/* ── legacy shim: 8 classes, still referenced by the admin pages ───── */
+.panel {{{{
   background: var(--hg-surface);
   border: 1px solid var(--hg-border);
   border-radius: var(--hg-radius-lg);
   padding: var(--hg-space-6);
   margin-bottom: var(--hg-space-5);
-}}
-.alert-info, .alert-warning {{
+}}}}
+.alert-info, .alert-warning {{{{
   border-radius: var(--hg-radius-md);
   padding: var(--hg-space-4) var(--hg-space-5);
   font-size: 13px;
   line-height: 1.6;
   margin: var(--hg-space-3) 0;
   border-left: 3px solid;
-}}
-.alert-info {{
+}}}}
+.alert-info {{{{
   background: var(--hg-info-surface);
   border-color: var(--hg-info-border);
   border-left-color: var(--hg-text-muted);
   color: var(--hg-info-text);
-}}
-.alert-warning {{
+}}}}
+.alert-warning {{{{
   background: var(--hg-warning-surface);
   border-color: var(--hg-warning-border);
   border-left-color: var(--hg-warning-text);
   color: var(--hg-warning-text);
-}}
-.kpi-wrap {{
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 1px;
-  background: var(--hg-border);
-  border: 1px solid var(--hg-border);
-  border-radius: var(--hg-radius-lg);
-  overflow: hidden;
-  margin-bottom: var(--hg-space-6);
-}}
-/* Hairline-separated, equal height, no shadows — a strip, not floating cards. */
-.kpi-card {{
-  background: var(--hg-surface) !important;   /* overrides inline gradient from callers */
-  border: 0 !important;
-  padding: var(--hg-space-5) var(--hg-space-5);
-}}
-.kpi-val {{
-  font-family: var(--hg-font-display);
-  font-size: 30px;
-  font-weight: {T.WEIGHT['semibold']};
-  letter-spacing: var(--hg-track-tight);
-  color: var(--hg-text-heading) !important;   /* overrides inline colour from callers */
-  line-height: 1.1;
-}}
-.kpi-lbl {{
-  font-size: 11px;
-  font-weight: {T.WEIGHT['medium']};
-  text-transform: uppercase;
-  letter-spacing: var(--hg-track-eyebrow);
-  color: var(--hg-text-muted);
-  margin-top: var(--hg-space-2);
-}}
-.role-badge {{
+}}}}
+.role-badge {{{{
   display: inline-block;
   font-size: 11px;
-  font-weight: {T.WEIGHT['semibold']};
+  font-weight: {{T.WEIGHT['semibold']}};
   text-transform: uppercase;
   letter-spacing: var(--hg-track-eyebrow);
   padding: 2px var(--hg-space-3);
@@ -1123,28 +1119,14 @@ def _legacy_block() -> str:
   background: var(--hg-primary-tint);
   color: var(--hg-primary);
   border: 1px solid var(--hg-primary-border);
-}}
-.rb-doctor, .rb-admin, .rb-superadmin {{
+}}}}
+.rb-doctor, .rb-admin, .rb-superadmin {{{{
   background: var(--hg-primary-tint);
   color: var(--hg-primary);
   border-color: var(--hg-primary-border);
-}}
-/* REMOVED in Phase 6, measured not guessed: .res-risk / .res-safe / .res-title /
-   .res-prob / .res-note / .user-card. Phase 6 replaced the diagnosis result panel with
-   risk_verdict + operating_point + reliability_panel and the sidebar user card with
-   sidebar_nav, so nothing references them in app.py or pages_ext.py any more.
-
-   The first attempt to find dead rules here reported ZERO, because it searched a
-   concatenation that included styles.py and tried to exclude this block by
-   `src.replace(_legacy_block(), "")` — which never matched, since _legacy_block()
-   returns CSS with the f-string tokens already substituted. Every class matched its
-   own rule. The search must exclude styles.py by file, not by string. */
+}}}}
 """
 
-
-# ════════════════════════════════════════════════════════════════════════
-# 5b. Login (§7.2)
-# ════════════════════════════════════════════════════════════════════════
 def _login_block() -> str:
     """
     The 44/56 full-bleed split.
@@ -1350,13 +1332,31 @@ def _tail_block() -> str:
 .hg-u-muted { color: var(--hg-text-muted); }
 .hg-u-subtle { color: var(--hg-text-subtle); }
 
-/* ── responsive ───────────────────────────────────────────────────── */
+/* ── responsive (§8: functional at 1440 / 1280 / 1024 / 768) ──────── */
+/* 1440 is the design width and needs no rule — the content column is capped at
+   1440px, so it is already correct. The three below are the widths where something
+   would otherwise break, ordered widest-first so the cascade narrows correctly. */
+
+/* 1280: the content column still fits; only the gutters need to give. */
+@media (max-width: 1280px) {
+  [data-testid="stMainBlockContainer"] { padding-left: 24px; padding-right: 24px; }
+}
+
+/* 1024: the sidebar plus a 1440 column no longer fit. Tighten the rail's label
+   column and drop the stat strip to three across so figures stop truncating. */
+@media (max-width: 1024px) {
+  :root { --hg-stat-cols: 3; }
+  .hg-rail__head { flex-wrap: wrap; }
+  .hg-cf__head, .hg-cf__row {
+    grid-template-columns: minmax(0, 1fr) 58px 58px minmax(0, 0.9fr);
+  }
+}
+
 @media (max-width: 1100px) {
   [data-testid="stMainBlockContainer"] { padding-left: 20px; padding-right: 20px; }
 }
 @media (max-width: 768px) {
   [data-testid="stMainBlockContainer"] { padding-left: 14px; padding-right: 14px; }
-  .kpi-wrap { grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); }
 }
 
 /* ── motion ───────────────────────────────────────────────────────── */
@@ -1374,15 +1374,59 @@ def _tail_block() -> str:
    Updated in Phase 6: .user-card / .res-risk / .res-safe were removed, and the
    components that replaced them are listed instead. */
 @media (forced-colors: active) {
-  .panel, .kpi-wrap, .hg-panel, .hg-verdict, .hg-alert, .hg-peer, .hg-stat,
+  .panel, .hg-panel, .hg-verdict, .hg-alert, .hg-peer, .hg-stat,
   .hg-op, .hg-rel { border: 1px solid CanvasText; }
   .hg-rail__track, .hg-rail__fill { forced-color-adjust: none; }
 }
 
-/* ── print ────────────────────────────────────────────────────────── */
+/* ── print (§8) ───────────────────────────────────────────────────── */
+/* "The diagnosis result must print legibly on A4. Hide the sidebar, force light tokens,
+   keep the extrapolation banner visible with its hatch pattern intact."
+   The hatch is the reason this block is longer than a couple of lines: browsers drop
+   background images when printing unless print-color-adjust is set, so a
+   dark-mode user printing an extrapolated result would get the banner's TEXT with no
+   hazard stripe — the caveat stripped of the marking that makes it obvious. */
 @media print {
-  [data-testid="stSidebar"], [data-testid="stHeader"] { display: none !important; }
-  [data-testid="stMainBlockContainer"] { max-width: none; padding: 0; }
+  [data-testid="stSidebar"],
+  [data-testid="stHeader"],
+  [data-testid="stToolbar"],
+  .stButton, .stDownloadButton, [data-testid="stSegmentedControl"] {
+    display: none !important;
+  }
+  [data-testid="stMainBlockContainer"] {
+    max-width: none !important;
+    padding: 0 !important;
+  }
+  /* Force the light tokens: printing dark ink on a white page is the only readable
+     outcome, and a dark-mode viewer would otherwise print near-white on white. */
+  :root, :root[data-theme="dark"] {
+    --hg-canvas: #FFFFFF;
+    --hg-surface: #FFFFFF;
+    --hg-sunken: #FFFFFF;
+    --hg-text: #1A2029;
+    --hg-text-heading: #0E131A;
+    --hg-text-muted: #3E4856;
+    --hg-text-subtle: #3E4856;
+    --hg-border: #BCC4CE;
+    --hg-hairline: #D8DDE4;
+  }
+  body, .stApp { background: #FFFFFF !important; }
+  /* Every fill and hatch must survive the print pipeline. */
+  .hg-alert, .hg-alert--extrapolation, .hg-rail__track, .hg-rail__fill,
+  .hg-rail__hatch, .hg-chip, .hg-verdict, .hg-danger, .hg-stat {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  /* The banner is the one thing that must never be lost to a page break. */
+  .hg-alert--extrapolation, .hg-verdict, .hg-op, .hg-rel {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .hg-alert--extrapolation { border: 2px solid #8C1D33 !important; }
+  /* Shadows print as grey mud. */
+  * { box-shadow: none !important; }
+  a[href]::after { content: ""; }   /* no URL footnotes in a clinical record */
+  @page { margin: 14mm; }
 }
 """
 

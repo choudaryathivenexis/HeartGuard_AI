@@ -202,7 +202,7 @@ def sidebar_nav(user: dict, pages: list[str], active: str) -> str:
             # rule per icon suffices.
             with sb.container(key=f"nav-{I.slug(label)}"):
                 if st.button(label, key=f"navbtn-{I.slug(label)}",
-                             use_container_width=True,
+                             width="stretch",
                              type="primary" if label == active else "secondary"):
                     selected = label
     return selected
@@ -220,7 +220,7 @@ def sidebar_footer(app_version: str, model_version: str = "",
     sb.markdown('<div class="hg-sb-divider"></div>', unsafe_allow_html=True)
     with sb.container(key="nav-signout"):
         clicked = st.button("Sign out", key="navbtn-signout",
-                            use_container_width=True)
+                            width="stretch")
     sb.markdown(
         f'<div class="hg-sb-foot">'
         f'<div>{esc(app_version)}</div>'
@@ -467,12 +467,68 @@ def data_table(df, column_config: dict | None = None, height: int | None = None,
     default arguments — that is now asserted.
     """
     kwargs = {"column_config": column_config or None, "hide_index": True,
-              "use_container_width": True}
+              "width": "stretch"}
     if height is not None:
         kwargs["height"] = height
     if key is not None:
         kwargs["key"] = key
     st.dataframe(df, **kwargs)
+
+
+# ════════════════════════════════════════════════════════════════════════
+# Destructive actions
+# ════════════════════════════════════════════════════════════════════════
+def danger_zone(title: str, body: str):
+    """
+    §7.6: a `danger`-toned panel with a HAIRLINE border, not a red fill.
+
+    "Red fills desensitise; the border plus typed confirmation is what actually prevents
+    accidents." A user who sees a red block every time they open Activity Logs stops
+    seeing it by the third visit — the signal has to be rare to work.
+    """
+    container = st.container(key="hg-danger-zone")
+    with container:
+        st.markdown(
+            f'<div class="hg-danger">'
+            f'<div class="hg-danger__head">{esc(title)}</div>'
+            f'<p class="hg-danger__body">{esc(body)}</p></div>',
+            unsafe_allow_html=True)
+    return container
+
+
+def destructive(label: str, confirm: str, key: str, *,
+                caption: str | None = None) -> bool:
+    """
+    A destructive action gated behind typed confirmation. Returns True only on the run
+    where the user has typed `confirm` exactly and pressed the button.
+
+    §7.6 forbids "a bare primary button next to a benign one", which is what all ten of
+    these were: `st.button("Delete Account")` sitting inches from `st.button("Save")`,
+    same size, same weight, one click and irreversible. Two of them — Clear All
+    Predictions and Purge Audit Logs — were adjacent to each other with no guard at all,
+    and the Phase 4 deep test destroyed the entire fixture database by clicking them.
+
+    The typed word is the target's own identifier rather than a generic "DELETE", so
+    muscle memory cannot carry a user through the gate: confirming requires reading
+    which record is about to go.
+
+    The button stays enabled and reports the mismatch instead of being disabled. A
+    disabled button with no explanation is a dead end; this says what is missing.
+    """
+    typed = st.text_input(
+        f"Type {confirm} to confirm", key=f"{key}__confirm",
+        placeholder=confirm, label_visibility="visible")
+    if caption:
+        st.caption(caption)
+    pressed = st.button(label, key=f"{key}__go", width="stretch")
+    if not pressed:
+        return False
+    if typed.strip() != confirm:
+        alert("warning", "Not confirmed",
+              f"This action was not carried out. Type {confirm!r} exactly — "
+              f"character for character — to confirm it.")
+        return False
+    return True
 
 
 def static_table(cols: list[str], rows: list[list], highlight: int | None = None,
@@ -506,6 +562,6 @@ __all__ = [
     "eyebrow", "chip", "identifier", "page_header", "section", "panel",
     "sidebar_nav", "sidebar_footer", "footer_meta", "empty_state",
     "stat", "stat_grid", "alert", "risk_verdict", "operating_point",
-    "reliability_panel", "data_table", "static_table",
+    "reliability_panel", "data_table", "static_table", "danger_zone", "destructive",
     "NAV_GROUPS", "nav_groups_for", "CLINICAL_TONES", "SEMANTIC_TONES",
 ]

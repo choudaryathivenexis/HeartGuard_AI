@@ -18,11 +18,23 @@ MODELS_DIR = os.path.join(BASE_DIR, "models")
 
 
 # ── shared helpers ─────────────────────────────────────────────────
-def _kpi(val, label, color, bg, border):
-    return f"""<div class="kpi-card" style="background:{bg};border-color:{border};">
-    <div class="kpi-val" style="color:{color};">{val}</div>
-    <div class="kpi-lbl">{label}</div>
-    </div>"""
+def _kpi(val, label, color=None, bg=None, border=None):
+    """
+    Legacy signature, new rendering.
+
+    The colour arguments are accepted and IGNORED. Every call site passed its own hex
+    plus a gradient and a border colour, which is how the dashboards ended up with six
+    competing hues; Phase 8 replaced that with `stat_grid`, and this shim converts the
+    16 remaining admin call sites without touching their argument lists.
+
+    Tone is not inferred from the discarded colour. A label mentioning risk gets a
+    clinical tone; everything else stays neutral, because colouring an inventory count
+    the same crimson as a clinical finding is what made these strips unreadable.
+    """
+    low = str(label).lower()
+    tone = ("high" if ("high risk" in low or "banned" in low)
+            else "low" if ("low risk" in low or "active" in low) else "default")
+    return uic.stat(str(label), str(val), tone=tone)
 
 
 def _load_results(include_virtual=False):
@@ -50,9 +62,13 @@ def _load_config():
 
 
 def _section_header(title, subtitle=""):
-    sub = f'<p class="hg-subtitle">{subtitle}</p>' if subtitle else ""
-    st.markdown(f'<p class="hg-title">{title}</p>{sub}', unsafe_allow_html=True)
-    st.markdown('<hr class="hg-divider">', unsafe_allow_html=True)
+    """
+    Kept as an adapter so the remaining call sites need not all change at once, but it
+    now renders through the component. The old version emitted a 24px title, a subtitle
+    and an <hr> with no hierarchy above it — three legacy classes for what page_header
+    does in one.
+    """
+    uic.page_header(title, subtitle or None)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -191,7 +207,7 @@ def page_patient_management(user):
     high = int(df['predicted_class'].sum())
     low = total - high
 
-    st.markdown('<div class="kpi-wrap">' +
+    st.markdown('<div class="hg-stat-grid" style="--hg-stat-cols:3;">' +
                 _kpi(total, "Total Patients Scanned", "#ef4444", "linear-gradient(135deg,#fee2e2,#fecdd3)", "#fca5a5") +
                 _kpi(high, "High Risk", "#dc2626", "linear-gradient(135deg,#fff1f2,#fee2e2)", "#ef4444") +
                 _kpi(low, "Low Risk", "#16a34a", "linear-gradient(135deg,#f0fdf4,#dcfce7)", "#86efac") +
@@ -217,7 +233,7 @@ def page_patient_management(user):
         'timestamp': 'Date', 'patient_name': 'Patient Name', 'age': 'Age',
         'gender': 'Gender', 'ap_hi': 'Systolic BP', 'ap_lo': 'Diastolic BP',
         'cholesterol': 'Cholesterol', 'model_used': 'Model', 'notes': 'Notes'
-    }), hide_index=True, use_container_width=True)
+    }), hide_index=True, width="stretch")
 
     st.markdown("---")
     st.markdown("#### Delete a Patient Record")
@@ -226,15 +242,19 @@ def page_patient_management(user):
                     for _, r in fdf.iterrows()]
         sel_rec = st.selectbox("Select record to delete", rec_opts)
         sel_id = int(sel_rec.split("ID:")[1].split("|")[0])
-        if st.button("Delete Selected Record", use_container_width=True):
-            auth_db.delete_prediction(sel_id, user['username'])
-            st.success("Record deleted.")
-            st.rerun()
+        with uic.danger_zone(
+                "Irreversible",
+                f"Deleting assessment {sel_id} removes its score, model version, "
+                f"threshold and applicability flag permanently."):
+            if uic.destructive("Delete this assessment", str(sel_id), "pm_del"):
+                auth_db.delete_prediction(sel_id, user['username'])
+                st.success(f"Assessment {sel_id} deleted.")
+                st.rerun()
 
     csv = fdf.to_csv(index=False).encode()
     st.download_button("Export Patient Records (CSV)", csv,
                        f"patients_{datetime.now().strftime('%Y%m%d')}.csv", "text/csv",
-                       use_container_width=True)
+                       width="stretch")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -347,15 +367,15 @@ MODEL USAGE BREAKDOWN:
     with d1:
         st.download_button("Download summary (.txt)", report_txt,
                            f"report_{datetime.now().strftime('%Y%m%d%H%M%S')}.txt",
-                           "text/plain", use_container_width=True)
+                           "text/plain", width="stretch")
     with d2:
         if rdf.empty:
-            st.button("Export rows (.csv)", disabled=True, use_container_width=True,
+            st.button("Export rows (.csv)", disabled=True, width="stretch",
                       help="No rows in this period.")
         else:
             st.download_button("Export rows (.csv)", rdf.to_csv(index=False).encode(),
                                f"raw_{datetime.now().strftime('%Y%m%d')}.csv",
-                               "text/csv", use_container_width=True)
+                               "text/csv", width="stretch")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -371,7 +391,7 @@ def page_doctor_management(user):
         st.markdown('<div class="alert-info">No doctors registered yet.</div>', unsafe_allow_html=True)
         return
 
-    st.markdown('<div class="kpi-wrap">' +
+    st.markdown('<div class="hg-stat-grid" style="--hg-stat-cols:3;">' +
                 _kpi(len(doctors), "Total Doctors", "#ef4444", "linear-gradient(135deg,#fee2e2,#fecdd3)", "#fca5a5") +
                 _kpi(sum(1 for d in doctors if not d['is_banned']), "Active", "#16a34a", "linear-gradient(135deg,#f0fdf4,#dcfce7)", "#86efac") +
                 _kpi(sum(1 for d in doctors if d['is_banned']), "Banned", "#dc2626", "linear-gradient(135deg,#fff1f2,#fee2e2)", "#ef4444") +
@@ -383,7 +403,7 @@ def page_doctor_management(user):
                  .rename(columns={'id': 'ID', 'username': 'Username', 'fullname': 'Full Name',
                                   'email': 'Email', 'specialisation': 'Specialisation',
                                   'created_at': 'Created'}),
-                 hide_index=True, use_container_width=True)
+                 hide_index=True, width="stretch")
 
     st.markdown("---")
     st.markdown("#### Manage Doctor")
@@ -399,7 +419,7 @@ def page_doctor_management(user):
         c1, c2, c3 = st.columns(3)
         with c1:
             lbl = "Unban Doctor" if sel_doc['is_banned'] else "Ban Doctor"
-            if st.button(lbl, use_container_width=True):
+            if st.button(lbl, width="stretch"):
                 if sel_doc['is_banned']:
                     auth_db.unban_user(sel_id, user['username'])
                     st.success("Doctor unbanned.")
@@ -409,16 +429,18 @@ def page_doctor_management(user):
                 st.rerun()
         with c2:
             new_spec = st.text_input("Update Specialisation", value=sel_doc.get('specialisation', ''))
-            if st.button("Save Specialisation", use_container_width=True):
+            if st.button("Save Specialisation", width="stretch"):
                 auth_db.update_user_profile(sel_id, sel_doc['fullname'], sel_doc['email'], new_spec)
                 st.success("Specialisation updated.")
                 st.rerun()
-        with c3:
-            st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("Delete Doctor Account", use_container_width=True):
-                auth_db.delete_user(sel_id, user['username'])
-                st.success("Doctor account deleted.")
-                st.rerun()
+    with uic.danger_zone(
+            "Irreversible",
+            f"Deleting {sel_doc['username']} removes the account and cascades to every "
+            f"assessment it owns."):
+        if uic.destructive("Delete this doctor account", sel_doc['username'], "dm_del"):
+            auth_db.delete_user(sel_id, user['username'])
+            st.success(f"Account {sel_doc['username']} deleted.")
+            st.rerun()
 
     st.markdown("---")
     st.markdown(f"#### Prediction Stats for {sel_doc['fullname']}")
@@ -427,7 +449,7 @@ def page_doctor_management(user):
         dp = pd.DataFrame(d_preds)
         d_high = int(dp['predicted_class'].sum())
         d_low = len(dp) - d_high
-        st.markdown('<div class="kpi-wrap">' +
+        st.markdown('<div class="hg-stat-grid" style="--hg-stat-cols:3;">' +
                     _kpi(len(dp), "Total Scans", "#ef4444", "linear-gradient(135deg,#fee2e2,#fecdd3)", "#fca5a5") +
                     _kpi(d_high, "High Risk", "#dc2626", "linear-gradient(135deg,#fff1f2,#fee2e2)", "#ef4444") +
                     _kpi(d_low, "Low Risk", "#16a34a", "linear-gradient(135deg,#f0fdf4,#dcfce7)", "#86efac") +
@@ -454,7 +476,7 @@ def page_prediction_management(user):
     risk_c = int(df['predicted_class'].sum())
     safe_c = len(df) - risk_c
 
-    st.markdown('<div class="kpi-wrap">' +
+    st.markdown('<div class="hg-stat-grid" style="--hg-stat-cols:3;">' +
                 _kpi(len(df), "Total Records", "#ef4444", "linear-gradient(135deg,#fee2e2,#fecdd3)", "#fca5a5") +
                 _kpi(risk_c, "High Risk", "#dc2626", "linear-gradient(135deg,#fff1f2,#fee2e2)", "#ef4444") +
                 _kpi(safe_c, "Low Risk", "#16a34a", "linear-gradient(135deg,#f0fdf4,#dcfce7)", "#86efac") +
@@ -495,7 +517,7 @@ def page_prediction_management(user):
     st.dataframe(fdf[[c for c in cols if c in fdf.columns]].rename(columns={
         'timestamp': 'Date', 'patient_name': 'Patient', 'age': 'Age',
         'gender': 'Gender', 'model_used': 'Model', 'doctor_name': 'Doctor'
-    }), hide_index=True, use_container_width=True)
+    }), hide_index=True, width="stretch")
 
     st.markdown("---")
     c_del, c_exp, c_clr = st.columns(3)
@@ -507,9 +529,9 @@ def page_prediction_management(user):
                         for _, r in fdf.head(50).iterrows()]
             sel_rec = st.selectbox("Select record", rec_opts, label_visibility="collapsed")
             sel_id = int(sel_rec.split("ID:")[1].split("|")[0])
-            if st.button("Delete Record", use_container_width=True):
+            if uic.destructive("Delete assessment", str(sel_id), "pmg_del"):
                 auth_db.delete_prediction(sel_id, user['username'])
-                st.success("Record deleted.")
+                st.success(f"Assessment {sel_id} deleted.")
                 st.rerun()
 
     with c_exp:
@@ -517,14 +539,19 @@ def page_prediction_management(user):
         csv = fdf.to_csv(index=False).encode()
         st.download_button("Export CSV", csv,
                            f"predictions_{datetime.now().strftime('%Y%m%d')}.csv",
-                           "text/csv", use_container_width=True)
+                           "text/csv", width="stretch")
 
     with c_clr:
-        st.markdown("**Clear ALL Predictions**")
-        if st.button("Clear All Records", use_container_width=True):
-            auth_db.clear_all_predictions(user['username'])
-            st.success("All predictions cleared.")
-            st.rerun()
+        _n = len(auth_db.get_predictions())
+        with uic.danger_zone(
+                "Irreversible — no automatic backup",
+                f"Deletes all {fmt.count(_n)} assessments in the system, not just the "
+                f"filtered rows shown. Take a backup first if there is any doubt."):
+            if uic.destructive("Delete all assessments", "DELETE ASSESSMENTS",
+                               "pmg_clear"):
+                auth_db.clear_all_predictions(user['username'])
+                st.success(f"{fmt.count(_n)} assessments deleted.")
+                st.rerun()
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -559,7 +586,7 @@ def page_dataset_management(user):
             udf = pd.read_csv(uploaded)
             st.success(f"File loaded: **{uploaded.name}** - {udf.shape[0]:,} rows x {udf.shape[1]} columns")
             st.markdown("**Preview (first 5 rows):**")
-            st.dataframe(udf.head(5), use_container_width=True)
+            st.dataframe(udf.head(5), width="stretch")
 
             info_df = pd.DataFrame({
                 'Column': udf.columns,
@@ -567,17 +594,17 @@ def page_dataset_management(user):
                 'Non-Null': udf.count().values,
                 'Sample': [str(udf[c].iloc[0]) for c in udf.columns]
             })
-            st.dataframe(info_df, hide_index=True, use_container_width=True)
+            st.dataframe(info_df, hide_index=True, width="stretch")
 
             col_a, col_b = st.columns(2)
             with col_a:
-                if st.button("Save as Custom Dataset", use_container_width=True):
+                if st.button("Save as Custom Dataset", width="stretch"):
                     udf.to_csv(custom_path, index=False)
                     auth_db.log_activity(user['id'], user['username'], "Dataset Upload",
                                          f"Custom dataset saved: {uploaded.name} ({udf.shape[0]} rows).")
                     st.success("Custom dataset saved! Go to ML Model Management to retrain.")
             with col_b:
-                if st.button("Replace Default Dataset", use_container_width=True):
+                if st.button("Replace Default Dataset", width="stretch"):
                     udf.to_csv(data_path, index=False)
                     auth_db.log_activity(user['id'], user['username'], "Dataset Replace",
                                          f"Default dataset replaced: {uploaded.name} ({udf.shape[0]} rows).")
@@ -596,7 +623,7 @@ def page_dataset_management(user):
             c2.metric("Features", str(len(ds.columns) - 1))
             c3.metric("Positive Cases", f"{ds[tgt].sum():,}")
             c4.metric("Balance", f"{ds[tgt].mean():.1%}")
-            st.dataframe(ds.describe().round(2), use_container_width=True)
+            st.dataframe(ds.describe().round(2), width="stretch")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -608,7 +635,7 @@ def page_admin_management(user):
     all_users = auth_db.get_all_users()
     admins = [u for u in all_users if u['role'] in ['Admin', 'SuperAdmin'] and u['id'] != user['id']]
 
-    st.markdown('<div class="kpi-wrap">' +
+    st.markdown('<div class="hg-stat-grid" style="--hg-stat-cols:3;">' +
                 _kpi(sum(1 for u in all_users if u['role'] == 'Admin'), "Admins", "#ef4444", "linear-gradient(135deg,#fee2e2,#fecdd3)", "#fca5a5") +
                 _kpi(sum(1 for u in all_users if u['role'] == 'SuperAdmin'), "Super Admins", "#dc2626", "linear-gradient(135deg,#fff1f2,#fee2e2)", "#ef4444") +
                 _kpi(sum(1 for u in all_users if u.get('is_banned') and u['role'] in ['Admin', 'SuperAdmin']), "Banned", "#6b7280", "linear-gradient(135deg,#f9fafb,#f3f4f6)", "#d1d5db") +
@@ -621,7 +648,7 @@ def page_admin_management(user):
     adf = pd.DataFrame(admins)
     adf['Status'] = adf['is_banned'].apply(lambda x: "Banned" if x else "Active")
     st.dataframe(adf[['id', 'username', 'role', 'fullname', 'email', 'Status', 'created_at']],
-                 hide_index=True, use_container_width=True)
+                 hide_index=True, width="stretch")
 
     st.markdown("---")
     st.markdown("#### Manage Admin Account")
@@ -631,10 +658,10 @@ def page_admin_management(user):
     sel_id = int(sel.split("ID:")[1])
     sel_adm = next(a for a in admins if a['id'] == sel_id)
 
-    c1, c2, c3 = st.columns(3)
+    c1, c2 = st.columns(2)
     with c1:
-        lbl = "Unban" if sel_adm['is_banned'] else "Ban"
-        if st.button(f"{lbl} Account", use_container_width=True):
+        lbl = "Restore access" if sel_adm['is_banned'] else "Suspend account"
+        if st.button(lbl, width="stretch", key="am_ban"):
             if sel_adm['is_banned']:
                 auth_db.unban_user(sel_id, user['username'])
                 st.success("Account unbanned.")
@@ -646,15 +673,17 @@ def page_admin_management(user):
         role_options = ["Admin", "SuperAdmin", "Doctor"]
         cur_role = sel_adm['role'] if sel_adm['role'] in role_options else "Admin"
         new_role = st.selectbox("Change Role To", role_options, index=role_options.index(cur_role))
-        if st.button("Update Role", use_container_width=True):
+        if st.button("Update Role", width="stretch"):
             auth_db.update_user_role(sel_id, new_role, user['username'])
             st.success(f"Role changed to {new_role}.")
             st.rerun()
-    with c3:
-        st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("Delete Account", use_container_width=True):
+    with uic.danger_zone(
+            "Irreversible",
+            "Deleting an administrator removes the account and cascades to everything "
+            "it owns. Confirm you are removing the right one."):
+        if uic.destructive("Delete this account", sel_adm['username'], "am_del"):
             auth_db.delete_user(sel_id, user['username'])
-            st.success("Account deleted.")
+            st.success(f"Account {sel_adm['username']} deleted.")
             st.rerun()
 
 
@@ -677,7 +706,7 @@ def page_role_permissions(user):
         "Admin":     ["Yes", "Yes", "Yes", "Yes", "No",  "Yes", "No",  "No",  "Yes", "No",  "No",  "No"],
         "SuperAdmin":["Yes", "Yes", "Yes", "Yes", "Yes", "Yes", "Yes", "Yes", "Yes", "Yes", "Yes", "Yes"],
     }
-    st.dataframe(pd.DataFrame(perm_data), hide_index=True, use_container_width=True)
+    st.dataframe(pd.DataFrame(perm_data), hide_index=True, width="stretch")
 
     st.markdown("---")
     st.markdown("#### Bulk Role Reassignment")
@@ -698,7 +727,7 @@ def page_role_permissions(user):
         cur = sel_obj['role'] if sel_obj['role'] in role_list else "Doctor"
         new_r = st.selectbox("Assign New Role", role_list, index=role_list.index(cur))
 
-    if st.button("Apply Role Change", use_container_width=True):
+    if st.button("Apply Role Change", width="stretch"):
         auth_db.update_user_role(sel_uid, new_r, user['username'])
         st.success(f"{sel_obj['fullname']} assigned role: {new_r}")
         st.rerun()
@@ -708,7 +737,7 @@ def page_role_permissions(user):
     udf = pd.DataFrame(all_users)
     udf['Status'] = udf['is_banned'].apply(lambda x: "Banned" if x else "Active")
     st.dataframe(udf[['id', 'username', 'role', 'fullname', 'email', 'Status']],
-                 hide_index=True, use_container_width=True)
+                 hide_index=True, width="stretch")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -809,7 +838,7 @@ def page_system_settings(user):
         threshold_value = st.slider("Manual threshold", 0.05, 0.95,
                                     float(settings.get("risk_threshold") or 0.5), step=0.01)
 
-    if st.button("Save Decision Threshold", use_container_width=True):
+    if st.button("Save Decision Threshold", width="stretch"):
         settings["risk_threshold"] = threshold_value
         with open(settings_path, "w") as f:
             json.dump(settings, f, indent=4)
@@ -838,7 +867,7 @@ def page_system_settings(user):
             max_preds = st.number_input("Max Predictions Per Day (per user)", 10, 1000,
                                         value=settings['max_predictions_per_day'])
 
-        saved = st.form_submit_button("Save System Settings", use_container_width=True)
+        saved = st.form_submit_button("Save System Settings", width="stretch")
         if saved:
             new_settings = {
                 "app_name": app_name, "institution": institution,
@@ -863,7 +892,7 @@ def page_system_settings(user):
         {"Setting": k.replace("_", " ").title(), "Value": str(v)}
         for k, v in settings.items()
     ])
-    st.dataframe(cfg_df, hide_index=True, use_container_width=True)
+    st.dataframe(cfg_df, hide_index=True, width="stretch")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -876,7 +905,7 @@ def page_backup_restore(user):
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown("Backup includes: **Database**, **Trained Models**, **Config files**, **Dataset**")
 
-    if st.button("Generate Backup Archive", use_container_width=True):
+    if st.button("Generate Backup Archive", width="stretch"):
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
             db_p = auth_db.DB_PATH
@@ -900,7 +929,7 @@ def page_backup_restore(user):
             data=buf,
             file_name=f"heartguard_backup_{ts}.zip",
             mime="application/zip",
-            use_container_width=True
+            width="stretch"
         )
         st.success("Backup ready for download!")
     st.markdown('</div>', unsafe_allow_html=True)
@@ -919,7 +948,7 @@ def page_backup_restore(user):
                     f"{size / 1024:.1f} KB" if size < 1024 * 1024
                     else f"{size / 1024 / 1024:.1f} MB"})
     if items:
-        st.dataframe(pd.DataFrame(items), hide_index=True, use_container_width=True)
+        st.dataframe(pd.DataFrame(items), hide_index=True, width="stretch")
 
     st.markdown("---")
     st.markdown("#### Restore from Backup")
@@ -999,7 +1028,7 @@ def page_backup_restore(user):
             if not accepted:
                 st.error("Nothing in this archive passed validation — restore aborted.")
             elif st.button(f"Restore {len(accepted)} verified file(s) (No DB overwrite)",
-                           use_container_width=True):
+                           width="stretch"):
                 for fname, payload in accepted:
                     dest = (os.path.join(BASE_DIR, "system_settings.json")
                             if fname == "system_settings.json"
@@ -1065,7 +1094,7 @@ def page_model_performance(user):
     """, unsafe_allow_html=True)
 
     # ── Metric KPI cards ─────────────────────────────────────────
-    st.markdown('<div class="kpi-wrap">' +
+    st.markdown('<div class="hg-stat-grid" style="--hg-stat-cols:3;">' +
         _kpi(f"{max(accs):.2%}", "Best Accuracy",  "#60a5fa", "linear-gradient(135deg,#1e3a5f,#0f2544)", "#1e40af") +
         _kpi(f"{max(aucs):.4f}", "Best AUC",       "#a855f7", "linear-gradient(135deg,#2d1f40,#180d2e)", "#a855f7") +
         _kpi(f"{max(f1s):.4f}",  "Best F1 Score",  "#10b981", "linear-gradient(135deg,#0d2e1e,#071a10)", "#10b981") +
@@ -1099,7 +1128,7 @@ def page_model_performance(user):
             "Best?":     ["🏆" if m == best_name else "" for m in model_names],
         })
         st.markdown("#### All Models — Metric Table")
-        st.dataframe(df_metrics, hide_index=True, use_container_width=True)
+        st.dataframe(df_metrics, hide_index=True, width="stretch")
 
         st.markdown("---")
         st.markdown("#### Visual Comparison")
@@ -1286,7 +1315,7 @@ def page_model_performance(user):
                     "Support":   str(int(d.get('support', 0))),
                 })
         if rows:
-            st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+            st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
 
         st.markdown("---")
         st.markdown("#### Full Metrics Summary — All Models")
@@ -1306,11 +1335,11 @@ def page_model_performance(user):
                 "TP":         tp, "TN": tn, "FP": fp, "FN": fn,
                 "Total Test": total,
             })
-        st.dataframe(pd.DataFrame(all_rows), hide_index=True, use_container_width=True)
+        st.dataframe(pd.DataFrame(all_rows), hide_index=True, width="stretch")
 
         csv_rows = pd.DataFrame(all_rows).to_csv(index=False).encode()
         st.download_button("Export Metrics as CSV", csv_rows,
-                           "model_metrics.csv", "text/csv", use_container_width=True)
+                           "model_metrics.csv", "text/csv", width="stretch")
 
     # ────────────────────────────────────────────────────────────
     # TAB 4 — Model Info

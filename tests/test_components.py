@@ -318,6 +318,8 @@ SMOKE = {
     "reliability_panel": ('C.reliability_panel(0.8, 0.7, 0.9, 0.0, 10)', "render"),
     "data_table": ('C.data_table(pd.DataFrame({"a": [1, 2]}))', "render"),
     "static_table": ('C.static_table(["a"], [["1"]])', "render"),
+    "danger_zone": ('with C.danger_zone("t", "b"):\n    pass', "render"),
+    "destructive": ('C.destructive("Delete", "TYPEME", "smoke_dz")', "render"),
 }
 
 script_lines = [

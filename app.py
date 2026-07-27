@@ -392,11 +392,23 @@ def role_badge(role):
     return f'<span class="role-badge {cls}">{label}</span>'
 
 
-def kpi(val, label, color, bg, border):
-    return f"""<div class="kpi-card" style="background:{bg};border-color:{border};">
-    <div class="kpi-val" style="color:{color};">{val}</div>
-    <div class="kpi-lbl">{label}</div>
-    </div>"""
+def kpi(val, label, color=None, bg=None, border=None):
+    """
+    Legacy signature, new rendering.
+
+    The colour arguments are accepted and IGNORED. Every call site passed its own hex
+    plus a gradient and a border colour, which is how the dashboards ended up with six
+    competing hues; Phase 8 replaced that with `stat_grid`, and this shim converts the
+    16 remaining admin call sites without touching their argument lists.
+
+    Tone is not inferred from the discarded colour. A label mentioning risk gets a
+    clinical tone; everything else stays neutral, because colouring an inventory count
+    the same crimson as a clinical finding is what made these strips unreadable.
+    """
+    low = str(label).lower()
+    tone = ("high" if ("high risk" in low or "banned" in low)
+            else "low" if ("low risk" in low or "active" in low) else "default")
+    return uic.stat(str(label), str(val), tone=tone)
 
 
 def section_header(icon, title, subtitle=""):
@@ -494,7 +506,7 @@ def _login_form():
             ui_login.inline_error(err.get("password"))
             ui_login.inline_error(err.get("form"))
             submitted = st.form_submit_button("Sign in", type="primary",
-                                              use_container_width=True)
+                                              width="stretch")
             if submitted:
                 e = {}
                 if not username:
@@ -556,7 +568,7 @@ def _register_form():
             # only through Role & Permission Management, by an existing SuperAdmin.
             r_role = "Doctor"
             r_sub = st.form_submit_button("Create account", type="primary",
-                                          use_container_width=True)
+                                          width="stretch")
             if r_sub:
                 e = {}
                 if not r_user:
@@ -760,7 +772,7 @@ def page_diagnosis(user):
                                  key="diag_notes")
         _applicability_expander(vals)
         submit = st.button("Run assessment", type="primary",
-                           use_container_width=True, key="diag_submit")
+                           width="stretch", key="diag_submit")
 
     if submit:
         st.session_state.diag_result = _run_assessment(
@@ -1120,7 +1132,7 @@ def _render_downloads(res, user):
     with a:
         st.download_button("Download report (.txt)", txt,
                            file_name=f"heartguard_{res['p_id']}_{stamp}.txt",
-                           mime="text/plain", use_container_width=True,
+                           mime="text/plain", width="stretch",
                            key="diag_dl_txt")
     with b:
         pdf, pdf_error = _pdf_report(res, user)
@@ -1129,12 +1141,12 @@ def _render_downloads(res, user):
             # any exception and rendered a disabled button, which hid two real key
             # mismatches against build_pdf_report's contract for an entire test cycle.
             st.button("Download report (PDF)", disabled=True,
-                      use_container_width=True, key="diag_dl_pdf_off",
+                      width="stretch", key="diag_dl_pdf_off",
                       help=f"PDF generation failed: {pdf_error}")
         else:
             st.download_button("Download report (PDF)", pdf,
                                file_name=f"heartguard_{res['p_id']}_{stamp}.pdf",
-                               mime="application/pdf", use_container_width=True,
+                               mime="application/pdf", width="stretch",
                                key="diag_dl_pdf")
 
 
@@ -1480,7 +1492,7 @@ def page_profile(user):
                                        placeholder="Leave blank to keep the current one")
                 ui_login.inline_error(err.get("password"))
                 saved = st.form_submit_button("Save changes", type="primary",
-                                             use_container_width=True)
+                                             width="stretch")
                 if saved:
                     e = {}
                     if not new_full:
@@ -1572,7 +1584,7 @@ def page_admin_users(user):
     admins = sum(1 for u in users if u['role'] == 'Admin')
     banned = sum(1 for u in users if u['is_banned'])
 
-    st.markdown('<div class="kpi-wrap">' +
+    st.markdown('<div class="hg-stat-grid" style="--hg-stat-cols:3;">' +
                 kpi(len(users), "Total Users", "#60a5fa", "linear-gradient(135deg,#1e3a5f,#0f2544)", "#1e40af") +
                 kpi(doctors, "Doctors", "#10b981", "linear-gradient(135deg,#0d2e1e,#071a10)", "#10b981") +
                 kpi(admins, "Admins", "#a78bfa", "linear-gradient(135deg,#2d1f40,#180d2e)", "#a855f7") +
@@ -1581,7 +1593,7 @@ def page_admin_users(user):
 
     show_df = df[['id', 'username', 'role', 'fullname', 'email', 'specialisation', 'is_banned', 'created_at']].copy()
     show_df['Status'] = show_df['is_banned'].apply(lambda x: "Banned" if x else "Active")
-    st.dataframe(show_df.drop(columns=['is_banned']), hide_index=True, use_container_width=True)
+    st.dataframe(show_df.drop(columns=['is_banned']), hide_index=True, width="stretch")
 
     st.markdown("---")
     st.markdown("#### Manage User Account")
@@ -1603,27 +1615,39 @@ def page_admin_users(user):
                     unsafe_allow_html=True)
         return
 
-    col1, col2, col3 = st.columns(3)
+    col1, col2 = st.columns(2)
     with col1:
+        # Reversible, so no typed gate — but banning ends the target's session on their
+        # next interaction (BUG-25), which is worth saying before it happens.
         if t_user['is_banned']:
-            if st.button("Unban User", use_container_width=True):
+            if st.button("Restore access", width="stretch",
+                         key="admin_unban"):
                 auth_db.unban_user(t_uid, user['username'])
-                st.success(f"User {t_user['username']} unbanned.")
+                st.success(f"{t_user['username']} can sign in again.")
                 st.rerun()
         else:
-            if st.button("Ban User", use_container_width=True):
+            if st.button("Suspend account", width="stretch",
+                         key="admin_ban"):
                 auth_db.ban_user(t_uid, user['username'])
-                st.success(f"User {t_user['username']} banned.")
+                st.success(f"{t_user['username']} suspended and signed out.")
                 st.rerun()
     with col2:
-        new_role = st.selectbox("Change Role To", ["Doctor", "Admin", "SuperAdmin"],
-                                index=["Doctor", "Admin", "SuperAdmin"].index(t_user['role']))
-        if st.button("Update Role", use_container_width=True):
+        new_role = st.selectbox("Role", ["Doctor", "Admin", "SuperAdmin"],
+                                index=["Doctor", "Admin", "SuperAdmin"].index(t_user['role']),
+                                key="admin_role")
+        if st.button("Update role", width="stretch", key="admin_role_go"):
             auth_db.update_user_role(t_uid, new_role, user['username'])
             st.success(f"Role updated to {new_role}.")
             st.rerun()
-    with col3:
-        if st.button("Delete Account", use_container_width=True):
+
+    # §7.6: irreversible actions get a hairline danger panel and typed confirmation.
+    # This used to be a bare `st.button("Delete Account")` in a third column, the same
+    # size and weight as "Update Role" beside it.
+    with uic.danger_zone(
+            "Irreversible",
+            f"Deleting {t_user['username']} removes the account and cascades to every "
+            f"prediction it owns. There is no undo and no backup taken automatically."):
+        if uic.destructive("Delete this account", t_user['username'], "admin_del"):
             auth_db.delete_user(t_uid, user['username'])
             st.success(f"Account {t_user['username']} deleted.")
             st.rerun()
@@ -1643,7 +1667,7 @@ def page_admin_analytics(user):
     risk_c = sum(1 for p in all_preds if p['predicted_class'] == 1)
     safe_c = len(all_preds) - risk_c
 
-    st.markdown('<div class="kpi-wrap">' +
+    st.markdown('<div class="hg-stat-grid" style="--hg-stat-cols:3;">' +
                 kpi(len(all_preds), "Total Predictions", "#60a5fa", "linear-gradient(135deg,#1e3a5f,#0f2544)", "#1e40af") +
                 kpi(risk_c, "High Risk Cases", "#ef4444", "linear-gradient(135deg,#3b1f1f,#1e0d0d)", "#ef4444") +
                 kpi(safe_c, "Low Risk Cases", "#10b981", "linear-gradient(135deg,#0d2e1e,#071a10)", "#10b981") +
@@ -1702,7 +1726,7 @@ def page_admin_analytics(user):
                              "F1 Score": f"{d.get('f1', 0):.3f}",
                              "Precision": f"{d.get('precision', 0):.3f}",
                              "Recall": f"{d.get('recall', 0):.3f}"})
-            st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+            st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
 
             fig2, ax3 = plt.subplots(figsize=(9, 3.5), facecolor='none')
             ax3.set_facecolor('none')
@@ -1733,13 +1757,13 @@ def page_admin_analytics(user):
         if not udf.empty:
             udf['Status'] = udf['is_banned'].apply(lambda x: "Banned" if x else "Active")
             st.dataframe(udf[['id', 'username', 'role', 'fullname', 'email', 'Status', 'created_at']],
-                         hide_index=True, use_container_width=True)
+                         hide_index=True, width="stretch")
 
     with t4:
         logs = auth_db.get_system_logs(100)
         if logs:
             st.dataframe(pd.DataFrame(logs)[['timestamp', 'username', 'action', 'details']],
-                         hide_index=True, use_container_width=True)
+                         hide_index=True, width="stretch")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -1763,7 +1787,7 @@ def page_training(user):
             try:
                 udf = pd.read_csv(uploaded)
                 st.success(f"Preview: {udf.shape[0]} rows x {udf.shape[1]} columns")
-                st.dataframe(udf.head(5), use_container_width=True)
+                st.dataframe(udf.head(5), width="stretch")
                 custom_path = os.path.join(BASE_DIR, "custom_dataset.csv")
                 if st.button("Use This Dataset for Training"):
                     udf.to_csv(custom_path, index=False)
@@ -1778,7 +1802,7 @@ def page_training(user):
             st.markdown('<div class="alert-info">Custom dataset detected - training will use it.</div>',
                         unsafe_allow_html=True)
 
-        if st.button("Start Full Training Pipeline", use_container_width=True):
+        if st.button("Start Full Training Pipeline", width="stretch"):
             with st.spinner("Training all 5 models... this may take a few minutes."):
                 t0 = time.time()
                 script = os.path.join(BASE_DIR, "train_models.py")
@@ -1821,7 +1845,7 @@ def page_training(user):
                     st.markdown(f"<small style='color:#64748b;'>Acc: {results[mname]['accuracy']:.1%}</small>",
                                 unsafe_allow_html=True)
             updated[mname] = enabled
-        if st.button("Save Configuration", use_container_width=True):
+        if st.button("Save Configuration", width="stretch"):
             save_config(updated)
             auth_db.log_activity(user['id'], user['username'],
                                  "Config Update", "Model enable/disable config saved.")
@@ -1847,7 +1871,7 @@ def page_training(user):
             display['F1'] = display['F1'].apply(lambda x: f"{x:.4f}")
             display['Precision'] = display['Precision'].apply(lambda x: f"{x:.4f}")
             display['Recall'] = display['Recall'].apply(lambda x: f"{x:.4f}")
-            st.dataframe(display, hide_index=True, use_container_width=True)
+            st.dataframe(display, hide_index=True, width="stretch")
 
             fig, ax = plt.subplots(figsize=(11, 4), facecolor='none')
             ax.set_facecolor('none')
@@ -1880,7 +1904,7 @@ def page_training(user):
         if runs:
             st.dataframe(pd.DataFrame(runs)[['timestamp', 'status', 'duration_s']].rename(
                 columns={'timestamp': 'Date/Time', 'status': 'Status', 'duration_s': 'Duration (s)'}),
-                         hide_index=True, use_container_width=True)
+                         hide_index=True, width="stretch")
         else:
             st.info("No training runs recorded yet.")
 
@@ -1908,7 +1932,7 @@ def page_audits(user):
                 fdf = fdf[fdf['username'].str.lower().str.contains(sf.lower(), na=False)]
 
             st.dataframe(fdf[['timestamp', 'username', 'action', 'details']],
-                         hide_index=True, use_container_width=True)
+                         hide_index=True, width="stretch")
             csv = fdf.to_csv(index=False).encode()
             st.download_button("Export Logs", csv,
                                f"audit_log_{datetime.now().strftime('%Y%m%d')}.csv", "text/csv")
@@ -1916,26 +1940,42 @@ def page_audits(user):
             st.info("No audit records found.")
 
     with tb:
-        st.markdown("#### Danger Zone")
-        st.markdown('<div class="alert-warning">These operations are irreversible. Proceed with caution.</div>',
+        # These two were bare, adjacent, unguarded buttons — and the Phase 4 deep test
+        # destroyed the entire fixture database by clicking them in sequence. If an
+        # automated sweep can wipe the system by accident, so can a person.
+        #
+        # Both now require the exact phrase typed, and the counts are stated first: a
+        # confirmation that does not say HOW MUCH is about to go is not informed consent.
+        _n_preds = len(auth_db.get_predictions())
+        _n_logs = len(auth_db.get_system_logs(limit=100000))
+        uic.section("Data management")
+        with uic.danger_zone(
+                "Irreversible — no automatic backup",
+                "Take a backup from Backup & Restore first if there is any doubt. "
+                "Neither operation can be undone from inside the application."):
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown(
+                    f'<p class="hg-note"><b>Delete every assessment.</b> '
+                    f'{fmt.count(_n_preds)} records, including their model versions, '
+                    f'thresholds and applicability flags. Patient rows remain.</p>',
                     unsafe_allow_html=True)
-        col1, col2 = st.columns(2)
-        with col1:
-            st.markdown("**Clear All Predictions**")
-            st.markdown("<small style='color:#64748b;'>Removes all diagnostic prediction records.</small>",
-                        unsafe_allow_html=True)
-            if st.button("Clear All Predictions", use_container_width=True):
-                auth_db.clear_all_predictions(user['username'])
-                st.success("All predictions cleared.")
-                st.rerun()
-        with col2:
-            st.markdown("**Purge Audit Logs**")
-            st.markdown("<small style='color:#64748b;'>Clears activity log history.</small>",
-                        unsafe_allow_html=True)
-            if st.button("Purge Audit Logs", use_container_width=True):
-                auth_db.clear_system_logs(user['username'])
-                st.success("Audit logs cleared.")
-                st.rerun()
+                if uic.destructive("Delete all assessments", "DELETE ASSESSMENTS",
+                                   "danger_preds"):
+                    auth_db.clear_all_predictions(user['username'])
+                    st.success(f"{fmt.count(_n_preds)} assessments deleted.")
+                    st.rerun()
+            with col2:
+                st.markdown(
+                    f'<p class="hg-note"><b>Purge the audit trail.</b> '
+                    f'{fmt.count(_n_logs)} entries. This is the record of who did what, '
+                    f'including the purge itself.</p>',
+                    unsafe_allow_html=True)
+                if uic.destructive("Purge audit log", "PURGE AUDIT LOG",
+                                   "danger_logs"):
+                    auth_db.clear_system_logs(user['username'])
+                    st.success(f"{fmt.count(_n_logs)} log entries purged.")
+                    st.rerun()
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -2321,7 +2361,7 @@ def page_model_performance(user):
                                  "F1-Score":  f"{d.get('f1-score',0):.4f}",
                                  "Support":   str(int(d.get('support',0)))})
             if rows:
-                st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+                st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
             st.markdown("---")
             st.markdown("#### Full Summary — All Models")
             all_rows = []
@@ -2334,9 +2374,9 @@ def page_model_performance(user):
                                  "F1": f"{r['f1']:.4f}", "Precision": f"{r['precision']:.4f}",
                                  "Recall": f"{r['recall']:.4f}",
                                  "TP": tp2, "TN": tn2, "FP": fp2, "FN": fn2})
-            st.dataframe(pd.DataFrame(all_rows), hide_index=True, use_container_width=True)
+            st.dataframe(pd.DataFrame(all_rows), hide_index=True, width="stretch")
             st.download_button("Export as CSV", pd.DataFrame(all_rows).to_csv(index=False).encode(),
-                               "model_metrics.csv", "text/csv", use_container_width=True)
+                               "model_metrics.csv", "text/csv", width="stretch")
 
     if 'Model Info' in _slot:
         with _slot['Model Info']:
@@ -2495,7 +2535,7 @@ def page_model_performance(user):
                     "Importance (normalised)": [f"{v:.4f}" for v in sorted_vals],
                     "Importance (%)": [f"{v*100:.2f}%" for v in sorted_vals],
                 })
-                st.dataframe(fi_df, hide_index=True, use_container_width=True)
+                st.dataframe(fi_df, hide_index=True, width="stretch")
 
                 # ── Cumulative Importance Curve ───────────────────────────
                 st.markdown("---")
@@ -2834,7 +2874,7 @@ def page_model_performance(user):
                         "FPR":          f"{fp_v/max(fp_v+tn_v,1):.2%}",
                         "FNR":          f"{fn_v/max(fn_v+tp_v,1):.2%}",
                     })
-                st.dataframe(pd.DataFrame(cm_rows), hide_index=True, use_container_width=True)
+                st.dataframe(pd.DataFrame(cm_rows), hide_index=True, width="stretch")
 
     # ══════════════════════════════════════════════════════════════════
     # TAB 7 — K-Fold Cross Validation
@@ -3033,7 +3073,7 @@ def page_model_performance(user):
                         cv_summary_rows.append(row)
                 if cv_summary_rows:
                     cv_df = pd.DataFrame(cv_summary_rows)
-                    st.dataframe(cv_df, hide_index=True, use_container_width=True)
+                    st.dataframe(cv_df, hide_index=True, width="stretch")
 
                 # ── TABLE: Per-fold detail ────────────────────────────────
                 with st.expander("Show per-fold detail for each model"):
@@ -3073,7 +3113,7 @@ def page_model_performance(user):
                             "Recall":    f"{cv['std']['recall']:.4f}",
                         })
                         st.dataframe(pd.DataFrame(fold_rows),
-                                     hide_index=True, use_container_width=True)
+                                     hide_index=True, width="stretch")
                         st.markdown("")
 
     # ══════════════════════════════════════════════════════════════════
@@ -3457,12 +3497,12 @@ def page_model_performance(user):
                             for i in sorted_idx
                         ],
                     })
-                    st.dataframe(shap_df, hide_index=True, use_container_width=True)
+                    st.dataframe(shap_df, hide_index=True, width="stretch")
                     st.download_button(
                         "Export SHAP Table (CSV)",
                         shap_df.to_csv(index=False).encode(),
                         f"shap_impact_{shap_sel.replace(' ','_')}_{datetime.now().strftime('%Y%m%d')}.csv",
-                        "text/csv", use_container_width=True)
+                        "text/csv", width="stretch")
 
                     st.markdown(
                         '<div class="alert-info" style="font-size:.82em;">'
@@ -3533,7 +3573,7 @@ def page_model_performance(user):
                         "NPV": f"{o['npv']:.1%}",
                         "Missed / 1,000": f"{o['missed_per_1000']:.0f}",
                     })
-                st.dataframe(pd.DataFrame(op_rows), hide_index=True, use_container_width=True)
+                st.dataframe(pd.DataFrame(op_rows), hide_index=True, width="stretch")
 
                 rec, leg = ops["recommended"], ops["legacy_half"]
                 saved = leg["missed_per_1000"] - rec["missed_per_1000"]
@@ -3623,13 +3663,13 @@ def page_model_performance(user):
                      "Action": "Above action threshold — further testing indicated"},
                     {"Band": "High", "Probability": f"≥ {rb['intermediate_max']:.3f}",
                      "Action": "Escalate directly to clinical review"},
-                ]), hide_index=True, use_container_width=True)
+                ]), hide_index=True, width="stretch")
 
                 st.download_button(
                     "Export Threshold Sweep (CSV)",
                     pd.DataFrame(sweep).to_csv(index=False).encode(),
                     f"threshold_sweep_{thr_sel.replace(' ', '_')}.csv",
-                    "text/csv", use_container_width=True)
+                    "text/csv", width="stretch")
 
     # ══════════════════════════════════════════════════════════════════
     # TAB 10 — Subgroup Performance & Fairness   (Run 5)
@@ -3691,7 +3731,7 @@ def page_model_performance(user):
                             "Flagged": f"{lv.get('flagged_rate', 0):.1%}",
                         })
                     st.dataframe(pd.DataFrame(srows), hide_index=True,
-                                 use_container_width=True)
+                                 width="stretch")
                     st.markdown(
                         '<div class="alert-info">Sensitivity is now equalised across age '
                     'bands — the <b>equal opportunity</b> fairness criterion. Under a '
@@ -3715,7 +3755,7 @@ def page_model_performance(user):
                     "Calib. gap": f"{lv['calibration_gap']:+.3f}",
                     "Sensitivity": f"{lv['sensitivity']:.1%}",
                     "Specificity": f"{lv['specificity']:.1%}",
-                } for lv in levels]), hide_index=True, use_container_width=True)
+                } for lv in levels]), hide_index=True, width="stretch")
 
                 # ── AUC with CI, and calibration gap ───────────────────────
                 lbls = [lv["level"] for lv in levels]
@@ -3779,7 +3819,7 @@ def page_model_performance(user):
                     "Export Full Subgroup Report (CSV)",
                     pd.DataFrame(flat).to_csv(index=False).encode(),
                     "subgroup_fairness_report.csv", "text/csv",
-                    use_container_width=True)
+                    width="stretch")
 
     # ══════════════════════════════════════════════════════════════════
     # TAB 11 — Clinical Benchmark & Feature Value   (Run 6)
@@ -3830,7 +3870,7 @@ def page_model_performance(user):
                                           if a.get("ci_low") is not None else "—"),
                         "Significant": "Yes" if a.get("significant") else "No",
                     })
-                st.dataframe(pd.DataFrame(brows), hide_index=True, use_container_width=True)
+                st.dataframe(pd.DataFrame(brows), hide_index=True, width="stretch")
 
                 fair = cbm.get("baselines", {}).get("Clinical logistic regression", {})
                 if fair:
@@ -3893,7 +3933,7 @@ def page_model_performance(user):
                                    if r.get("auc_ci_low") is not None else "—"),
                         "Marginal gain": ("—" if r.get("delta_auc") is None
                                           else f"{r['delta_auc']:+.4f}"),
-                    } for r in ladder]), hide_index=True, use_container_width=True)
+                    } for r in ladder]), hide_index=True, width="stretch")
 
                     lx = [r["step"].replace("+ ", "+\n") for r in ladder]
                     ly = [r["auc"] for r in ladder]
@@ -3933,7 +3973,7 @@ def page_model_performance(user):
                             {"Metric": f"Best of {hp['n_trials']} random trials", "AUC": f"{hp['tuned_auc']:.4f}"},
                             {"Metric": "Gain", "AUC": f"{hp['gain']:+.4f}"},
                             {"Metric": "Search time", "AUC": f"{hp['search_seconds']:.0f}s"},
-                        ]), hide_index=True, use_container_width=True)
+                        ]), hide_index=True, width="stretch")
                         st.caption(hp.get("conclusion", ""))
                     else:
                         st.info("Search not yet run — `python -c \"import train_models as t; t.tune()\"`")
@@ -3947,7 +3987,7 @@ def page_model_performance(user):
                              "+ Interactions": f"{it[fam]['with_interactions']:.4f}",
                              "Delta": f"{it[fam]['delta']:+.4f}"}
                             for fam in ("tree", "linear") if fam in it
-                        ]), hide_index=True, use_container_width=True)
+                        ]), hide_index=True, width="stretch")
                         st.caption("Trees already represent interactions implicitly, so the "
                                "null result there indicates the functional form is "
                                "saturated. The linear gain merely confirms the terms are "
@@ -3970,7 +4010,7 @@ def page_model_performance(user):
                     "Export Benchmark Report (JSON)",
                     json.dumps(bm, indent=2).encode(),
                     "clinical_benchmark_report.json", "application/json",
-                    use_container_width=True)
+                    width="stretch")
 
 
 # ══════════════════════════════════════════════════════════════════

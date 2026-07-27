@@ -2241,3 +2241,195 @@ hairline `danger` panel rather than a red fill), the §8 accessibility audit inc
 protanopia/deuteranopia simulation of the four band colours, responsive verification at
 1440/1280/1024/768, the print stylesheet, and the `use_container_width` →
 `width='stretch'` sweep.
+
+---
+
+# RUN 14 — Frontend redesign, Phase 10: admin pages, accessibility, print (2026-07-27)
+
+The last phase. Destructive actions gated, the quality floor in §8 measured rather than
+asserted, and the legacy shim reduced to what is genuinely still referenced.
+
+## 14.1 — Ten destructive actions had no confirmation at all
+
+Every one was a bare `st.button`, the same size and weight as the benign control beside
+it, one click from irreversible. Two of them — *Clear All Predictions* and *Purge Audit
+Logs* — sat adjacent with no guard whatsoever, and **the Phase 4 deep test destroyed the
+entire fixture database by clicking them in sequence.** If an automated sweep can wipe
+the system by accident, so can a person.
+
+§7.6's pattern is now a component:
+
+- **`danger_zone(title, body)`** — a `danger`-toned panel with a **hairline border, never
+  a red fill**. The brief's reasoning is right and worth repeating: red fills
+  desensitise. A user who sees a red block every time they open Activity Logs stops
+  seeing it by the third visit. The signal has to be rare to work.
+- **`destructive(label, confirm, key)`** — returns `True` only when the exact phrase has
+  been typed. The phrase is **the target's own identifier**, not a generic "DELETE", so
+  muscle memory cannot carry someone through the gate: confirming requires reading which
+  record is about to go. The button stays enabled and reports the mismatch rather than
+  being disabled, because a disabled button with no explanation is a dead end.
+
+The two audit-log operations now also **state the counts first** — "3,247 assessments,
+including their model versions, thresholds and applicability flags" — because a
+confirmation that does not say *how much* is about to go is not informed consent. The
+audit purge additionally notes that it erases the record of the purge itself.
+
+## 14.2 — The last of the KPI cards
+
+The 16 remaining call sites are converted by reshaping `_kpi` / `kpi` into shims that
+keep the old five-argument signature and **ignore the colour arguments entirely**. That
+is the point: every call site passed its own hex plus a gradient plus a border colour,
+which is how the dashboards ended up with six competing hues.
+
+Tone is not inferred from the discarded colour — a label mentioning risk gets a clinical
+tone and everything else stays neutral, so an inventory count is never painted the same
+crimson as a clinical finding.
+
+`_section_header` likewise became an adapter onto `page_header`, retiring
+`.hg-title` / `.hg-subtitle` / `.hg-divider`.
+
+**Legacy shim: 24 classes → 8, 3.4 KB → 1.32 KB.** The eight that remain are genuinely
+referenced by six admin CRUD pages that this phase restyled but did not rebuild — which
+is the correct scope call, not an oversight. Rebuilding them was never in the brief.
+
+## 14.3 — The accessibility audit, computed
+
+§8: *"Verify every risk-band text/surface pair with an actual contrast calculation — do
+not eyeball it."* `tests/test_a11y.py` does exactly that, plus Machado et al. (2009)
+colour-vision simulation, reproduced inline because §1.3 forbids new dependencies.
+
+**Two real defects found and fixed:**
+
+| | Was | Now |
+|---|---|---|
+| `text_subtle` (light) | NEUTRAL[500] — **4.12:1** on white, under AA, and it carries 11.5px captions with no large-text exemption | NEUTRAL[550] `#606B7A` — solved against the *darkest* surface a caption sits on: surface 5.41 / canvas 4.99 / sunken 4.57 |
+| `text_subtle` (dark) | `#7A8493` — 4.57:1 on the dark surface but **3.42:1** on the dark sunken panel, which is where the peer and reliability captions actually sit | `#98A0AC` — 6.56 / 4.91 |
+
+The light fix carries a trade-off recorded in the token rather than hidden: at
+NEUTRAL[550] it is only 1.16:1 from `text_muted`, so the muted/subtle distinction is no
+longer legible as a colour difference. **The palette has one neutral text level too many
+for AA at caption size**, and the honest resolution is that the remaining hierarchy is
+carried by size and weight. Compliance beats a hierarchy nuance nobody can see.
+
+**One defect in my own measurement.** The suite first reported all four dark risk bands
+failing at 1.91–2.66:1 — which looked like a serious token bug. The dark band surfaces
+are 8-digit hexes (the rail colour at 14% alpha, `#1E8A6A24`), and measuring text against
+the raw hex measures it against the full-strength colour, which nobody sees. Composited
+correctly they are **7.53–8.90:1**. The tokens were fine. A contrast audit that ignores
+alpha is always wrong in this direction: it flags the safe, and would equally miss the
+unsafe.
+
+## 14.4 — The colour-blindness finding, stated rather than asserted away
+
+```
+protanopia     worst pair low/intermediate = 1.12:1    low/high = 1.94:1
+deuteranopia   worst pair low/high         = 1.05:1    low/high = 1.05:1
+tritanopia     worst pair low/intermediate = 1.14:1    low/high = 1.29:1
+```
+
+**Under deuteranopia the LOW and HIGH rails converge to 1.05:1 — indistinguishable.**
+This is intrinsic. Verdigris-to-crimson *is* the red-green axis, §3.10 fixes the Brand
+Six, and no reassignment inside those six escapes it.
+
+It is recorded as a measured limitation, not a pass/fail, because a threshold the palette
+cannot meet is not a test — it is a wish. What is asserted hard instead is the property
+§8 actually requires and that genuinely protects the reader: **no information carried by
+colour alone.** For all four bands, by exercising the real components:
+
+- the chip carries its label as text;
+- the verdict carries the band label as text, the numeric probability, **and** a rail
+  position;
+- the rail names every band in text and exposes an `aria-label` stating the value, the
+  band and the threshold;
+- the reliability rating is a word — Strong / Moderate / Limited.
+
+With the hue collapse measured, that redundancy is not a nice-to-have. It is the only
+thing separating the bands for a deuteranopic reader.
+
+## 14.5 — Print and responsive
+
+The print block was two lines. §8 requires the diagnosis result to print legibly on A4
+with *"the extrapolation banner visible with its hatch pattern intact"*, and the hatch is
+the reason it is now thirty:
+
+- **light tokens are forced**, or a dark-mode user prints near-white ink on white paper;
+- **`print-color-adjust: exact`** on every fill and hatch, because browsers drop
+  background images when printing — a dark-mode user printing an extrapolated result
+  would otherwise get the banner's *text* with no hazard stripe, the caveat stripped of
+  the marking that makes it obvious;
+- **`break-inside: avoid`** on the banner, verdict, operating point and reliability panel,
+  so the one thing that must never be lost to a page break is not;
+- shadows suppressed (they print as grey mud) and URL footnotes off.
+
+Breakpoints now cover the four widths §8 names. 1440 is the design width and is handled
+by the content-column cap rather than a media query; 1280, 1024 and 768 each have rules.
+
+## 14.6 — `use_container_width` → `width`
+
+72 call sites plus 4 inside the component library. Deprecated since 2025-12-31 and still
+only warning, but every one emitted a console warning on **every rerun**. Verified
+`width="stretch"` works in this Streamlit version before sweeping.
+
+## 14.7 — Two of my own tests corrected
+
+**The component suite's "no export is left untested" guard fired** on `danger_zone` and
+`destructive` the moment I added them — which is exactly what it exists for. That guard
+was added in Phase 8 after `data_table` shipped broken and uncalled; it has now caught
+its first real omission.
+
+**The Phase 9 snapshot diff was retired, deliberately and with the reason recorded.** It
+compared every string literal against a pre-restructure snapshot and returned 0 corrupted
+of 2,978 — the result that made the re-indent safe to commit. But it was a *one-time
+migration verification against a frozen snapshot*, and Phase 10's 24 intentional
+deletions made it report false failures. A test that cries wolf is worse than no test,
+because it trains you to ignore it. Replaced with snapshot-free structural guarantees
+that hold permanently: eleven `if label in _slot` guards, no orphaned `with tN:` inside
+`page_model_performance`, no markdown literal indented into an accidental code block,
+and **every tab bar in the application ≤ 4 items**.
+
+That last one immediately caught that my first regex was unscoped and matching
+`page_admin_analytics`' own legitimate four-tab layout.
+
+## 14.8 — Phase 10 gate
+
+```
+27-path AppTest          27/27 routed, 0 exceptions
+py_compile               clean on 16 modules
+pyflakes                 no new warnings vs baseline
+test_tokens              0 failures   (63 assertions)
+test_brand               0 failures   (60)
+test_rail                0 failures   (71)
+test_components          0 failures   (101 — 18 exports smoke-tested)
+test_login               0 failures   (68)
+test_diagnosis           0 failures   (76)
+test_charts              0 failures   (78)
+test_performance_ia      0 failures   (44)
+test_a11y                0 failures   (84) + 2 recorded limitations
+CSS budget               47.1 KB / 60 KB    emotion-cache selectors: 0
+legacy shim              8 classes, 1.32 KB (from 24 classes, 3.4 KB)
+KPI cards                0 anywhere in the application
+destructive actions      10/10 behind typed confirmation
+use_container_width      0 remaining
+screenshots              SUBSTITUTED — see 9.0
+```
+
+## 14.9 — What the redesign did not do
+
+Recorded plainly rather than left implicit:
+
+- **Screenshots were never possible.** No browser automation exists in this environment
+  and §1.3 forbids adding one. Every phase substituted structural comparison against
+  `baseline/widget_tree.json` plus targeted matplotlib renders — which is how three
+  Phase 7 defects were caught that no assertion had covered. It is weaker than a
+  screenshot and was reported as such at every gate.
+- **Six admin CRUD pages were restyled, not rebuilt.** Doctor / Prediction / Dataset /
+  Admin Management, Role & Permissions and System Settings now use the tokens, the
+  component chrome and the gated destructive actions, but their internal layouts are
+  original. §7.6 describes a pattern; applying it fully to six more pages was outside
+  this brief's ten phases.
+- **`register_user` still performs no username character validation.** Defended in depth
+  — every render site passes through `esc()`, and the XSS probe confirms no tag can form
+  — but the input validation is absent, and fixing it means changing `auth_db`
+  authentication logic that §1.1 puts out of bounds.
+- **The risk ramp cannot be made colour-blind-safe or luminance-monotonic** inside the
+  Brand Six. Both are measured, recorded, and mitigated by redundant encoding.

@@ -119,7 +119,10 @@ NEUTRAL = {
     200: "#D8DDE4",   # hairline border  <- default
     300: "#BCC4CE",   # strong border, disabled text
     400: "#97A1AE",   # placeholder, axis labels
-    500: "#737E8C",   # tertiary text
+    500: "#737E8C",   # placeholder / disabled-adjacent — 4.12:1 on white, NOT AA text
+    550: "#606B7A",   # tertiary text, captions — the lightest step that clears 4.5:1
+                      # against surface, canvas AND sunken (5.41 / 4.99 / 4.57).
+                      # Added in Phase 10's audit; see CSS["text_subtle"].
     600: SLATE,       # secondary text, captions
     700: "#3E4856",   # body text
     800: "#2A323D",   # emphasis
@@ -234,7 +237,12 @@ DARK = {
     "border_strong": "#3E4856",
     "text":         "#E4E8ED",
     "text_muted":   "#A8B2BF",
-    "text_subtle":  "#7A8493",
+    # Lightened from #7A8493 by Phase 10's audit. The old value measured 4.57:1 against
+    # the dark surface but only 3.42:1 against the dark SUNKEN panel (#2A323D), which is
+    # where the peer-comparison and reliability captions sit — under AA, and it is the
+    # darker surface that governs. #98A0AC clears both (6.56 / 4.91) while still reading
+    # as a step below text_muted.
+    "text_subtle":  "#98A0AC",
     "primary":      VERDIGRIS_RAMP[300],
     "primary_hover": VERDIGRIS_RAMP[200],
 }
@@ -337,7 +345,19 @@ CSS: dict[str, str] = {
     "text":           NEUTRAL[700],
     "text_heading":   NEUTRAL[900],
     "text_muted":     NEUTRAL[600],
-    "text_subtle":    NEUTRAL[500],
+    # NEUTRAL[550], not [500]. Phase 10's contrast audit measured NEUTRAL[500] at
+    # 4.12:1 on white — under WCAG AA's 4.5 — and this token carries 11.5px captions,
+    # which are body text with no large-text exemption. Solving for 4.5:1 against the
+    # DARKEST surface a caption appears on (sunken, #E9ECF0) gives NEUTRAL[550]:
+    #
+    #     surface 5.41   canvas 4.99   sunken 4.57
+    #
+    # THE TRADE-OFF, RECORDED RATHER THAN HIDDEN: at that value it is only 1.16:1 from
+    # text_muted, so the muted/subtle distinction is no longer legible as a colour
+    # difference. The palette has one neutral text level too many for AA at caption
+    # size, and the honest resolution is that the remaining hierarchy is carried by
+    # size and weight instead. Compliance beats a hierarchy nuance nobody can see.
+    "text_subtle":    NEUTRAL[550],
     "text_disabled":  NEUTRAL[300],
     "text_inverse":   BONE,
     # interaction
