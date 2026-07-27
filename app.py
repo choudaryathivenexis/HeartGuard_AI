@@ -1293,6 +1293,43 @@ Final diagnosis must be confirmed by a licensed medical professional.
 =================================================="""
 
 
+def _ci_overlap(results, model_names):
+    """
+    One measured sentence about whether the AUC ranking is real.
+
+    §7.5 asks for the bootstrap CIs to be rendered; rendering them without saying what
+    they mean would leave the reader doing the comparison by eye, and by eye a 0.0001
+    gap looks like a result. So this computes the actual overlap and reports it.
+
+    Deliberately not a fixed disclaimer. If a retrain ever DOES separate two models,
+    this sentence changes to say so — a caveat that is true regardless of the data is a
+    caveat readers learn to skip.
+    """
+    spans = []
+    for m in model_names:
+        lo, hi = results[m].get("auc_ci_low"), results[m].get("auc_ci_high")
+        if lo is not None and hi is not None:
+            spans.append((results[m]["auc"], lo, hi, m))
+    if len(spans) < 2:
+        return "confidence intervals are unavailable for this run."
+    spans.sort(reverse=True)
+    (_, best_lo, best_hi, best_m) = spans[0]
+    # Which models' intervals overlap the leader's? Overlapping intervals are not proof
+    # of equivalence, but non-overlap is the weakest evidence of a real difference worth
+    # quoting, and it is what a reader is implicitly assuming when they read the rank.
+    overlapping = [m for (_a, lo, hi, m) in spans[1:] if lo <= best_hi and hi >= best_lo]
+    if not overlapping:
+        return (f"{best_m}'s interval {fmt.interval(best_lo, best_hi, fmt.auc)} does "
+                f"not overlap any other model's, so its lead is measurable.")
+    if len(overlapping) == len(spans) - 1:
+        return (f"every model's interval overlaps {best_m}'s "
+                f"{fmt.interval(best_lo, best_hi, fmt.auc)}, so the ranking is not "
+                f"evidence that any one of them is better than another.")
+    return (f"{len(overlapping)} of {len(spans) - 1} other models overlap {best_m}'s "
+            f"interval {fmt.interval(best_lo, best_hi, fmt.auc)}; the ranking "
+            f"separates only the rest.")
+
+
 def _band_edges(model_label):
     """The three band cut-points for the rail, from thresholds.json."""
     rb = (load_thresholds().get("models", {}).get(model_label, {})
@@ -1927,364 +1964,394 @@ def page_model_performance(user):
     best_idx  = aucs.index(max(aucs))
     best_name = model_names[best_idx]
 
-    st.markdown(f"""
-    <div style="background:linear-gradient(135deg,#1e0d2e,#2d1f40);border:2px solid #a855f7;
-                border-radius:14px;padding:18px 24px;margin-bottom:20px;display:flex;align-items:center;gap:16px;">
-      <div style="font-size:2.4em;">&#127942;</div>
-      <div>
-        <div style="color:#e9d5ff;font-size:1.05em;font-weight:700;">Best Performing Model</div>
-        <div style="color:#a855f7;font-size:1.5em;font-weight:800;">{best_name}</div>
-        <div style="color:#c4b5fd;font-size:.85em;">AUC: <b>{aucs[best_idx]:.4f}</b> &nbsp;|&nbsp;
-          Accuracy: <b>{accs[best_idx]:.4f}</b> &nbsp;|&nbsp; F1: <b>{f1s[best_idx]:.4f}</b></div>
-      </div>
-    </div>""", unsafe_allow_html=True)
-
-    st.markdown('<div class="kpi-wrap">' +
-        kpi(f"{max(accs):.2%}", "Best Accuracy",  "#60a5fa", "linear-gradient(135deg,#1e3a5f,#0f2544)", "#1e40af") +
-        kpi(f"{max(aucs):.4f}", "Best AUC",       "#a855f7", "linear-gradient(135deg,#2d1f40,#180d2e)", "#a855f7") +
-        kpi(f"{max(f1s):.4f}",  "Best F1 Score",  "#10b981", "linear-gradient(135deg,#0d2e1e,#071a10)", "#10b981") +
-        kpi(f"{max(precs):.4f}","Best Precision",  "#f59e0b", "linear-gradient(135deg,#2d1f02,#1a1002)", "#f59e0b") +
-        kpi(f"{max(recs):.4f}", "Best Recall",    "#ef4444", "linear-gradient(135deg,#3b1f1f,#1e0d0d)", "#ef4444") +
-        '</div>', unsafe_allow_html=True)
-
-    st.markdown("---")
-    t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11 = st.tabs([
-        "Metric Comparison", "Confusion Matrices", "Detailed Report",
-        "Model Info", "Feature Importance", "ROC & PR Curves",
-        "K-Fold CV", "Explainable AI (SHAP)", "Threshold & Clinical Utility",
-        "Subgroup Performance & Fairness", "Clinical Benchmark & Feature Value"
+    # The trophy banner is gone. A gold-medal emoji beside a leader whose confidence
+    # interval overlaps every other model's is a celebration of noise, and §3.10 puts
+    # AUC with its interval in the headline slot rather than an award.
+    _best_lo = results[best_name].get("auc_ci_low")
+    _best_hi = results[best_name].get("auc_ci_high")
+    uic.stat_grid([
+        {"label": "Leading model", "value": MODEL_SHORT_NAMES.get(best_name, best_name),
+         "hint": best_name},
+        {"label": "Discrimination", "value": fmt.auc(aucs[best_idx]),
+         "hint": (fmt.interval(_best_lo, _best_hi, fmt.auc)
+                  if _best_lo is not None else "no interval for this run")},
+        {"label": "Sensitivity at operating point", "value": fmt.metric3(max(recs)),
+         "hint": "the metric a screening tool is chosen on"},
+        {"label": "Models compared", "value": fmt.count(len(model_names))},
     ])
+    # Accuracy is deliberately NOT in the strip. §3.10 forbids it as a headline: at this
+    # dataset's near-balanced prevalence a 0.70 accuracy tells a reader almost nothing,
+    # and it was the largest number on the page. It remains in the table below.
+    # ── §7.5: eleven horizontal tabs become four groups ──────────────
+    # Eleven items is a navigation failure: no tab bar survives it, labels truncate and
+    # nobody discovers anything past tab six. The grouping below is verbatim from §7.5.
+    #
+    # It is also a large performance win. st.tabs renders EVERY body on every run, so
+    # all eleven used to execute on each page load — measured at 24.5s. Only the active
+    # group's bodies run now, which is why each is behind `if label in _slot` rather
+    # than merely being handed a different container.
+    _GROUPS = {
+        "Performance": ["Metric Comparison", "Confusion Matrices",
+                        "Detailed Report", "ROC & PR Curves"],
+        "Validation": ["K-Fold CV", "Subgroup Performance & Fairness"],
+        "Clinical": ["Threshold & Clinical Utility",
+                     "Clinical Benchmark & Feature Value"],
+        "Explainability": ["Feature Importance", "Explainable AI (SHAP)",
+                           "Model Info"],
+    }
+    with st.container(key="perf-groups"):
+        _group = st.segmented_control(
+            "Section", list(_GROUPS), default="Performance",
+            key="perf_group", label_visibility="collapsed") or "Performance"
+    _labels = _GROUPS[_group]
+    _slot = dict(zip(_labels, st.tabs(_labels)))
 
-    with t1:
+    if 'Metric Comparison' in _slot:
+        with _slot['Metric Comparison']:
         # ── Collect timing data (graceful fallback if not in results) ──
-        train_times = [results[m].get("training_time_s", 0.0) for m in model_names]
-        pred_times  = [results[m].get("pred_time_ms",    0.0) for m in model_names]
-        has_timing  = any(t > 0 for t in train_times)
+            train_times = [results[m].get("training_time_s", 0.0) for m in model_names]
+            pred_times  = [results[m].get("pred_time_ms",    0.0) for m in model_names]
+            has_timing  = any(t > 0 for t in train_times)
 
-        # ── Build full comparison table ────────────────────────────────
-        best_acc_idx  = accs.index(max(accs))
-        best_auc_idx  = aucs.index(max(aucs))
-        best_f1_idx   = f1s.index(max(f1s))
-        best_prec_idx = precs.index(max(precs))
-        best_rec_idx  = recs.index(max(recs))
-        fast_train    = train_times.index(min(train_times)) if has_timing else -1
-        fast_pred     = pred_times.index(min(pred_times))   if has_timing else -1
+            # ── Build full comparison table ────────────────────────────────
+            best_acc_idx  = accs.index(max(accs))
+            best_auc_idx  = aucs.index(max(aucs))
+            best_f1_idx   = f1s.index(max(f1s))
+            best_prec_idx = precs.index(max(precs))
+            best_rec_idx  = recs.index(max(recs))
+            fast_train    = train_times.index(min(train_times)) if has_timing else -1
+            fast_pred     = pred_times.index(min(pred_times))   if has_timing else -1
 
-        def _tag(i, best_i, fmt_val):
-            return f"{fmt_val} ★" if i == best_i else fmt_val
+            def _tag(i, best_i, fmt_val):
+                return f"{fmt_val} ★" if i == best_i else fmt_val
 
-        table_rows = []
-        for i, mn in enumerate(model_names):
-            row = {
-                "Model":            mn,
-                "Accuracy":         _tag(i, best_acc_idx,  f"{accs[i]:.4f} ({accs[i]:.1%})"),
-                "Precision":        _tag(i, best_prec_idx, f"{precs[i]:.4f}"),
-                "Recall":           _tag(i, best_rec_idx,  f"{recs[i]:.4f}"),
-                "F1 Score":         _tag(i, best_f1_idx,   f"{f1s[i]:.4f}"),
-                "ROC AUC":          _tag(i, best_auc_idx,  f"{aucs[i]:.4f}"),
-            }
-            if has_timing:
-                row["Train Time (s)"]  = _tag(i, fast_train, f"{train_times[i]:.2f}s")
-                row["Pred Time (ms)"]  = _tag(i, fast_pred,  f"{pred_times[i]:.1f} ms/1k")
-            row["Rank (AUC)"] = aucs.index(aucs[i]) + 1 if False else \
-                                 sorted(range(len(aucs)), key=lambda x: aucs[x],
-                                        reverse=True).index(i) + 1
-            table_rows.append(row)
+            table_rows = []
+            for i, mn in enumerate(model_names):
+                row = {
+                    "Model":            mn,
+                    "Accuracy":         _tag(i, best_acc_idx,  f"{accs[i]:.4f} ({accs[i]:.1%})"),
+                    "Precision":        _tag(i, best_prec_idx, f"{precs[i]:.4f}"),
+                    "Recall":           _tag(i, best_rec_idx,  f"{recs[i]:.4f}"),
+                    "F1 Score":         _tag(i, best_f1_idx,   f"{f1s[i]:.4f}"),
+                    "ROC AUC":          _tag(i, best_auc_idx,  f"{aucs[i]:.4f}"),
+                }
+                # §7.5: render the bootstrap CIs. They have been computed and stored
+                # since Run 4 and shown nowhere — so the table invited reading a
+                # 0.0001 gap between two models as a real difference. The intervals
+                # overlap almost completely, which is the actual finding.
+                _lo = results[mn].get("auc_ci_low")
+                _hi = results[mn].get("auc_ci_high")
+                row["AUC 95% CI"] = (fmt.interval(_lo, _hi, fmt.auc)
+                                     if _lo is not None and _hi is not None else "—")
+                if has_timing:
+                    row["Train Time (s)"]  = _tag(i, fast_train, f"{train_times[i]:.2f}s")
+                    row["Pred Time (ms)"]  = _tag(i, fast_pred,  f"{pred_times[i]:.1f} ms/1k")
+                row["Rank (AUC)"] = aucs.index(aucs[i]) + 1 if False else \
+                                     sorted(range(len(aucs)), key=lambda x: aucs[x],
+                                            reverse=True).index(i) + 1
+                table_rows.append(row)
 
-        st.markdown("#### Complete Model Comparison Table")
-        st.markdown(
-            '<div class="alert-info">★ = Best value in that column. '
-            'Train Time = seconds to fit on the training set. '
-            'Pred Time = milliseconds to predict 1,000 samples.</div>',
-            unsafe_allow_html=True)
-        st.dataframe(pd.DataFrame(table_rows), hide_index=True, use_container_width=True)
+            uic.section("Complete model comparison")
+            # The ★ tells you which value is largest. The CI column tells you whether
+            # that means anything — and here it usually does not. Stating the overlap
+            # explicitly is the difference between a ranking and a finding.
+            _overlap = _ci_overlap(results, model_names)
+            uic.alert(
+                "info", "How to read this table",
+                "★ marks the largest value in a column. Read the AUC interval before "
+                "the rank: " + _overlap + " Train time is seconds to fit; prediction "
+                "time is milliseconds per 1,000 samples.")
+            uic.data_table(pd.DataFrame(table_rows))
 
-        # Export button
-        export_df = pd.DataFrame([{
-            "Model": mn,
-            "Accuracy": accs[i], "Precision": precs[i], "Recall": recs[i],
-            "F1 Score": f1s[i],  "ROC AUC":  aucs[i],
-            "Train Time (s)": train_times[i] if has_timing else "N/A",
-            "Pred Time (ms)": pred_times[i]  if has_timing else "N/A",
-        } for i, mn in enumerate(model_names)])
-        st.download_button(
-            "Export Comparison Table (CSV)",
-            export_df.to_csv(index=False).encode(),
-            f"model_comparison_{datetime.now().strftime('%Y%m%d')}.csv",
-            "text/csv", use_container_width=True)
+            # Export button
+            export_df = pd.DataFrame([{
+                "Model": mn,
+                "Accuracy": accs[i], "Precision": precs[i], "Recall": recs[i],
+                "F1 Score": f1s[i],  "ROC AUC":  aucs[i],
+                "AUC CI low": results[mn].get("auc_ci_low"),
+                "AUC CI high": results[mn].get("auc_ci_high"),
+                "Train Time (s)": train_times[i] if has_timing else "N/A",
+                "Pred Time (ms)": pred_times[i]  if has_timing else "N/A",
+            } for i, mn in enumerate(model_names)])
+            st.download_button(
+                "Export comparison table (.csv)",
+                export_df.to_csv(index=False).encode(),
+                f"model_comparison_{datetime.now().strftime('%Y%m%d')}.csv",
+                "text/csv", key="perf_cmp_csv")
 
-        st.markdown("---")
-
-        # ── CHART 1: Grouped bar — Accuracy/AUC/F1/Precision/Recall ──
-        col_l, col_r = st.columns(2)
-        with col_l:
-            st.markdown("**Accuracy / AUC / F1 per Model**")
-            fig, ax = plt.subplots(figsize=(6, 4), facecolor='none')
-            ax.set_facecolor('none')
-            x = range(len(model_names))
-            w = 0.18
-            # Categorical, not clinical: these are five metrics, and 3.10 reserves
-            # the risk hues for clinical meaning.
-            _mg = ucharts.categorical(5)
-            metrics_grp = list(zip([accs, aucs, f1s, precs, recs], _mg,
-                                   ['Accuracy', 'AUC', 'F1', 'Precision', 'Recall']))
-            offsets = [-2*w, -w, 0, w, 2*w]
-            for (vals, col, lbl), off in zip(metrics_grp, offsets):
-                bars = ax.bar([i + off for i in x], vals,
-                              width=w, label=lbl, color=col, alpha=0.88)
-                for bar in bars:
-                    ax.annotate(f"{bar.get_height():.2f}",
-                                xy=(bar.get_x()+bar.get_width()/2, bar.get_height()),
-                                xytext=(0, 2), textcoords="offset points",
-                                ha='center', color=ucharts.color('fg'), fontsize=5.5, fontweight='600')
-            ax.set_xticks(list(x))
-            ax.set_xticklabels(short_names, color=ucharts.color('fg'), fontsize=9)
-            ax.set_ylim(0, 1.14)
-            ax.tick_params(colors=ucharts.color('fg'), labelsize=8)
-            ax.legend(facecolor=ucharts.color('surface'), labelcolor=ucharts.color('fg'), fontsize=7,
-                      loc='upper right', ncol=2)
-            for sp in ['top', 'right']:   ax.spines[sp].set_visible(False)
-            for sp in ['left', 'bottom']: ax.spines[sp].set_color(ucharts.color('spine'))
-            ax.grid(True, axis='y', color=ucharts.color('surface'), linestyle='--',
-                    linewidth=0.5, alpha=0.6)
-            plt.tight_layout()
-            st.pyplot(fig, transparent=True)
-            plt.close()
-
-        with col_r:
-            st.markdown("**AUC Ranking**")
-            si = sorted(range(len(aucs)), key=lambda i: aucs[i], reverse=True)
-            fig2, ax2 = plt.subplots(figsize=(6, 4), facecolor='none')
-            ax2.set_facecolor('none')
-            bar_h = ax2.barh([model_names[i] for i in si], [aucs[i] for i in si],
-                             color=[colors_bar[i] for i in si], height=0.5)
-            ax2.set_xlim(0, 1.05)
-            ax2.tick_params(colors=ucharts.color('fg'), labelsize=8)
-            for sp in ['top', 'right']:   ax2.spines[sp].set_visible(False)
-            for sp in ['left', 'bottom']: ax2.spines[sp].set_color(ucharts.color('spine'))
-            for bar in bar_h:
-                ax2.text(bar.get_width() + 0.01, bar.get_y() + bar.get_height()/2,
-                         f"{bar.get_width():.4f}", va='center',
-                         color=ucharts.color('fg'), fontsize=8, fontweight='600')
-            plt.tight_layout()
-            st.pyplot(fig2, transparent=True)
-            plt.close()
-
-        st.markdown("---")
-
-        # ── CHART 2: Radar / Spider chart ─────────────────────────────
-        st.markdown("**Radar Chart — All Metrics per Model**")
-        radar_metrics = ['Accuracy', 'Precision', 'Recall', 'F1', 'AUC']
-        radar_vals_all = [[accs[i], precs[i], recs[i], f1s[i], aucs[i]]
-                          for i in range(len(model_names))]
-        angles = np.linspace(0, 2 * np.pi, len(radar_metrics),
-                             endpoint=False).tolist()
-        angles += angles[:1]   # close the polygon
-
-        fig_r, ax_r = plt.subplots(figsize=(6, 5),
-                                   subplot_kw=dict(polar=True),
-                                   facecolor='none')
-        ax_r.set_facecolor('none')
-        for i, (mn, rv) in enumerate(zip(model_names, radar_vals_all)):
-            vals = rv + rv[:1]
-            ax_r.plot(angles, vals, color=colors_bar[i],
-                      linewidth=2, label=short_names[i])
-            ax_r.fill(angles, vals, color=colors_bar[i], alpha=0.10)
-
-        ax_r.set_thetagrids(np.degrees(angles[:-1]), radar_metrics,
-                            color=ucharts.color('fg'), fontsize=9)
-        ax_r.set_ylim(0, 1)
-        ax_r.set_yticks([0.2, 0.4, 0.6, 0.8, 1.0])
-        ax_r.set_yticklabels(['0.2','0.4','0.6','0.8','1.0'],
-                              color=ucharts.color('fg_subtle'), fontsize=7)
-        ax_r.grid(color=ucharts.color('grid'), linestyle='--', linewidth=0.6)
-        ax_r.spines['polar'].set_color(ucharts.color('spine'))
-        ax_r.legend(facecolor=ucharts.color('surface'), labelcolor=ucharts.color('fg'),
-                    fontsize=9, loc='upper right', bbox_to_anchor=(1.35, 1.1))
-        plt.tight_layout()
-        st.pyplot(fig_r, transparent=True)
-        plt.close()
-
-        st.markdown("---")
-
-        # ── CHART 3: Training & Prediction Time ───────────────────────
-        if has_timing:
-            st.markdown("**Training Time vs Prediction Time**")
-            fig_t, (ax_t1, ax_t2) = plt.subplots(1, 2, figsize=(10, 3.5),
-                                                   facecolor='none')
-            for ax_t in [ax_t1, ax_t2]:
-                ax_t.set_facecolor('none')
-
-            # Training time bar
-            bt = ax_t1.bar(short_names, train_times,
-                           color=colors_bar[:len(model_names)], alpha=0.88)
-            ax_t1.set_title("Train Time (seconds)", color=ucharts.color('fg'),
-                            fontsize=9, fontweight='700')
-            ax_t1.tick_params(colors=ucharts.color('fg'), labelsize=8)
-            for sp in ['top','right']:   ax_t1.spines[sp].set_visible(False)
-            for sp in ['left','bottom']: ax_t1.spines[sp].set_color(ucharts.color('spine'))
-            ax_t1.grid(True, axis='y', color=ucharts.color('surface'), linestyle='--',
-                       linewidth=0.5, alpha=0.6)
-            for bar in bt:
-                ax_t1.annotate(f"{bar.get_height():.2f}s",
-                               xy=(bar.get_x()+bar.get_width()/2, bar.get_height()),
-                               xytext=(0, 3), textcoords="offset points",
-                               ha='center', color=ucharts.color('fg'), fontsize=7.5)
-
-            # Prediction time bar
-            bp2 = ax_t2.bar(short_names, pred_times,
-                            color=colors_bar[:len(model_names)], alpha=0.88)
-            ax_t2.set_title("Pred Time (ms / 1,000 samples)", color=ucharts.color('fg'),
-                            fontsize=9, fontweight='700')
-            ax_t2.tick_params(colors=ucharts.color('fg'), labelsize=8)
-            for sp in ['top','right']:   ax_t2.spines[sp].set_visible(False)
-            for sp in ['left','bottom']: ax_t2.spines[sp].set_color(ucharts.color('spine'))
-            ax_t2.grid(True, axis='y', color=ucharts.color('surface'), linestyle='--',
-                       linewidth=0.5, alpha=0.6)
-            for bar in bp2:
-                ax_t2.annotate(f"{bar.get_height():.1f}ms",
-                               xy=(bar.get_x()+bar.get_width()/2, bar.get_height()),
-                               xytext=(0, 3), textcoords="offset points",
-                               ha='center', color=ucharts.color('fg'), fontsize=7.5)
-            plt.tight_layout()
-            st.pyplot(fig_t, transparent=True)
-            plt.close()
-        else:
-            st.markdown(
-                '<div class="alert-warning">Training/Prediction time data not available. '
-                'Re-train models to capture timing metrics.</div>',
-                unsafe_allow_html=True)
-
-        st.markdown("---")
-        st.markdown("**Precision vs Recall**")
-        fig3, ax3 = plt.subplots(figsize=(7, 4), facecolor='none')
-        ax3.set_facecolor('none')
-        for i, m in enumerate(model_names):
-            ax3.scatter(recs[i], precs[i], color=colors_bar[i], s=120, zorder=5,
-                        edgecolors=ucharts.color('surface'), linewidths=0.5)
-            ax3.annotate(short_names[i], (recs[i]+0.003, precs[i]+0.003),
-                         color=colors_bar[i], fontsize=9, fontweight='700')
-        ax3.set_xlabel("Recall", color=ucharts.color('fg'), fontsize=9)
-        ax3.set_ylabel("Precision", color=ucharts.color('fg'), fontsize=9)
-        ax3.tick_params(colors=ucharts.color('fg'), labelsize=8)
-        for sp in ['top', 'right']:   ax3.spines[sp].set_visible(False)
-        for sp in ['left', 'bottom']: ax3.spines[sp].set_color(ucharts.color('spine'))
-        ax3.set_xlim(0.3, 1.05)
-        ax3.set_ylim(0.3, 1.05)
-        ax3.grid(True, color=ucharts.color('surface'), linestyle='--', linewidth=0.5, alpha=0.6)
-        plt.tight_layout()
-        st.pyplot(fig3, transparent=True)
-        plt.close()
-
-
-    with t2:
-        st.markdown("#### Confusion Matrices — All Models")
-        st.markdown('<div class="alert-info">0 = Low Risk (No Disease), 1 = High Risk (Disease)</div>',
-                    unsafe_allow_html=True)
-        cols_cm = st.columns(len(model_names))
-        sens_list, spec_list = [], []
-        for idx, (mn, col) in enumerate(zip(model_names, cols_cm)):
-            cm = results[mn]['conf_matrix']
-            tn, fp = cm[0][0], cm[0][1]
-            fn, tp = cm[1][0], cm[1][1]
-            sens = tp / (tp + fn) if (tp + fn) else 0
-            spec = tn / (tn + fp) if (tn + fp) else 0
-            sens_list.append(sens)
-            spec_list.append(spec)
-            with col:
-                st.markdown(f"**{short_names[idx]}**")
-                fig_cm, ax_cm = plt.subplots(figsize=(2.6, 2.2), facecolor='none')
-                ax_cm.set_facecolor('none')
-                cm_arr = [[tn, fp], [fn, tp]]
-                _im_cm = ax_cm.imshow(cm_arr, cmap=ucharts.cmap('sequential', reverse=True),
-                                      aspect='auto', vmin=0)
-                for r in range(2):
-                    for c_ in range(2):
-                        ax_cm.text(c_, r, str(cm_arr[r][c_]),
-                                   ha='center', va='center',
-                                   color=ucharts.on_color(_im_cm.cmap(_im_cm.norm(cm_arr[r][c_]))),
-                                   fontsize=10, fontweight='700')
-                ax_cm.set_xticks([0, 1])
-                ax_cm.set_yticks([0, 1])
-                ax_cm.set_xticklabels(['P0', 'P1'], color=ucharts.color('fg'), fontsize=7)
-                ax_cm.set_yticklabels(['A0', 'A1'], color=ucharts.color('fg'), fontsize=7)
-                ax_cm.tick_params(length=0)
-                plt.tight_layout(pad=0.3)
-                st.pyplot(fig_cm, transparent=True)
+            # ── CHART 1: Grouped bar — Accuracy/AUC/F1/Precision/Recall ──
+            col_l, col_r = st.columns(2)
+            with col_l:
+                st.markdown("**Accuracy / AUC / F1 per Model**")
+                fig, ax = plt.subplots(figsize=(6, 4), facecolor='none')
+                ax.set_facecolor('none')
+                x = range(len(model_names))
+                w = 0.18
+                # Categorical, not clinical: these are five metrics, and 3.10 reserves
+                # the risk hues for clinical meaning.
+                _mg = ucharts.categorical(5)
+                metrics_grp = list(zip([accs, aucs, f1s, precs, recs], _mg,
+                                       ['Accuracy', 'AUC', 'F1', 'Precision', 'Recall']))
+                offsets = [-2*w, -w, 0, w, 2*w]
+                for (vals, col, lbl), off in zip(metrics_grp, offsets):
+                    bars = ax.bar([i + off for i in x], vals,
+                                  width=w, label=lbl, color=col, alpha=0.88)
+                    for bar in bars:
+                        ax.annotate(f"{bar.get_height():.2f}",
+                                    xy=(bar.get_x()+bar.get_width()/2, bar.get_height()),
+                                    xytext=(0, 2), textcoords="offset points",
+                                    ha='center', color=ucharts.color('fg'), fontsize=5.5, fontweight='600')
+                ax.set_xticks(list(x))
+                ax.set_xticklabels(short_names, color=ucharts.color('fg'), fontsize=9)
+                ax.set_ylim(0, 1.14)
+                ax.tick_params(colors=ucharts.color('fg'), labelsize=8)
+                ax.legend(facecolor=ucharts.color('surface'), labelcolor=ucharts.color('fg'), fontsize=7,
+                          loc='upper right', ncol=2)
+                for sp in ['top', 'right']:   ax.spines[sp].set_visible(False)
+                for sp in ['left', 'bottom']: ax.spines[sp].set_color(ucharts.color('spine'))
+                ax.grid(True, axis='y', color=ucharts.color('surface'), linestyle='--',
+                        linewidth=0.5, alpha=0.6)
+                plt.tight_layout()
+                st.pyplot(fig, transparent=True)
                 plt.close()
-                st.markdown(f"""<div style="font-size:.72em;color:#6b7280;line-height:1.6;">
+
+            with col_r:
+                st.markdown("**AUC Ranking**")
+                si = sorted(range(len(aucs)), key=lambda i: aucs[i], reverse=True)
+                fig2, ax2 = plt.subplots(figsize=(6, 4), facecolor='none')
+                ax2.set_facecolor('none')
+                bar_h = ax2.barh([model_names[i] for i in si], [aucs[i] for i in si],
+                                 color=[colors_bar[i] for i in si], height=0.5)
+                ax2.set_xlim(0, 1.05)
+                ax2.tick_params(colors=ucharts.color('fg'), labelsize=8)
+                for sp in ['top', 'right']:   ax2.spines[sp].set_visible(False)
+                for sp in ['left', 'bottom']: ax2.spines[sp].set_color(ucharts.color('spine'))
+                for bar in bar_h:
+                    ax2.text(bar.get_width() + 0.01, bar.get_y() + bar.get_height()/2,
+                             f"{bar.get_width():.4f}", va='center',
+                             color=ucharts.color('fg'), fontsize=8, fontweight='600')
+                plt.tight_layout()
+                st.pyplot(fig2, transparent=True)
+                plt.close()
+
+            st.markdown("---")
+
+            # ── CHART 2: Radar / Spider chart ─────────────────────────────
+            st.markdown("**Radar Chart — All Metrics per Model**")
+            radar_metrics = ['Accuracy', 'Precision', 'Recall', 'F1', 'AUC']
+            radar_vals_all = [[accs[i], precs[i], recs[i], f1s[i], aucs[i]]
+                              for i in range(len(model_names))]
+            angles = np.linspace(0, 2 * np.pi, len(radar_metrics),
+                                 endpoint=False).tolist()
+            angles += angles[:1]   # close the polygon
+
+            fig_r, ax_r = plt.subplots(figsize=(6, 5),
+                                       subplot_kw=dict(polar=True),
+                                       facecolor='none')
+            ax_r.set_facecolor('none')
+            for i, (mn, rv) in enumerate(zip(model_names, radar_vals_all)):
+                vals = rv + rv[:1]
+                ax_r.plot(angles, vals, color=colors_bar[i],
+                          linewidth=2, label=short_names[i])
+                ax_r.fill(angles, vals, color=colors_bar[i], alpha=0.10)
+
+            ax_r.set_thetagrids(np.degrees(angles[:-1]), radar_metrics,
+                                color=ucharts.color('fg'), fontsize=9)
+            ax_r.set_ylim(0, 1)
+            ax_r.set_yticks([0.2, 0.4, 0.6, 0.8, 1.0])
+            ax_r.set_yticklabels(['0.2','0.4','0.6','0.8','1.0'],
+                                  color=ucharts.color('fg_subtle'), fontsize=7)
+            ax_r.grid(color=ucharts.color('grid'), linestyle='--', linewidth=0.6)
+            ax_r.spines['polar'].set_color(ucharts.color('spine'))
+            ax_r.legend(facecolor=ucharts.color('surface'), labelcolor=ucharts.color('fg'),
+                        fontsize=9, loc='upper right', bbox_to_anchor=(1.35, 1.1))
+            plt.tight_layout()
+            st.pyplot(fig_r, transparent=True)
+            plt.close()
+
+            st.markdown("---")
+
+            # ── CHART 3: Training & Prediction Time ───────────────────────
+            if has_timing:
+                st.markdown("**Training Time vs Prediction Time**")
+                fig_t, (ax_t1, ax_t2) = plt.subplots(1, 2, figsize=(10, 3.5),
+                                                       facecolor='none')
+                for ax_t in [ax_t1, ax_t2]:
+                    ax_t.set_facecolor('none')
+
+                # Training time bar
+                bt = ax_t1.bar(short_names, train_times,
+                               color=colors_bar[:len(model_names)], alpha=0.88)
+                ax_t1.set_title("Train Time (seconds)", color=ucharts.color('fg'),
+                                fontsize=9, fontweight='700')
+                ax_t1.tick_params(colors=ucharts.color('fg'), labelsize=8)
+                for sp in ['top','right']:   ax_t1.spines[sp].set_visible(False)
+                for sp in ['left','bottom']: ax_t1.spines[sp].set_color(ucharts.color('spine'))
+                ax_t1.grid(True, axis='y', color=ucharts.color('surface'), linestyle='--',
+                           linewidth=0.5, alpha=0.6)
+                for bar in bt:
+                    ax_t1.annotate(f"{bar.get_height():.2f}s",
+                                   xy=(bar.get_x()+bar.get_width()/2, bar.get_height()),
+                                   xytext=(0, 3), textcoords="offset points",
+                                   ha='center', color=ucharts.color('fg'), fontsize=7.5)
+
+                # Prediction time bar
+                bp2 = ax_t2.bar(short_names, pred_times,
+                                color=colors_bar[:len(model_names)], alpha=0.88)
+                ax_t2.set_title("Pred Time (ms / 1,000 samples)", color=ucharts.color('fg'),
+                                fontsize=9, fontweight='700')
+                ax_t2.tick_params(colors=ucharts.color('fg'), labelsize=8)
+                for sp in ['top','right']:   ax_t2.spines[sp].set_visible(False)
+                for sp in ['left','bottom']: ax_t2.spines[sp].set_color(ucharts.color('spine'))
+                ax_t2.grid(True, axis='y', color=ucharts.color('surface'), linestyle='--',
+                           linewidth=0.5, alpha=0.6)
+                for bar in bp2:
+                    ax_t2.annotate(f"{bar.get_height():.1f}ms",
+                                   xy=(bar.get_x()+bar.get_width()/2, bar.get_height()),
+                                   xytext=(0, 3), textcoords="offset points",
+                                   ha='center', color=ucharts.color('fg'), fontsize=7.5)
+                plt.tight_layout()
+                st.pyplot(fig_t, transparent=True)
+                plt.close()
+            else:
+                st.markdown(
+                    '<div class="alert-warning">Training/Prediction time data not available. '
+                'Re-train models to capture timing metrics.</div>',
+                    unsafe_allow_html=True)
+
+            st.markdown("---")
+            st.markdown("**Precision vs Recall**")
+            fig3, ax3 = plt.subplots(figsize=(7, 4), facecolor='none')
+            ax3.set_facecolor('none')
+            for i, m in enumerate(model_names):
+                ax3.scatter(recs[i], precs[i], color=colors_bar[i], s=120, zorder=5,
+                            edgecolors=ucharts.color('surface'), linewidths=0.5)
+                ax3.annotate(short_names[i], (recs[i]+0.003, precs[i]+0.003),
+                             color=colors_bar[i], fontsize=9, fontweight='700')
+            ax3.set_xlabel("Recall", color=ucharts.color('fg'), fontsize=9)
+            ax3.set_ylabel("Precision", color=ucharts.color('fg'), fontsize=9)
+            ax3.tick_params(colors=ucharts.color('fg'), labelsize=8)
+            for sp in ['top', 'right']:   ax3.spines[sp].set_visible(False)
+            for sp in ['left', 'bottom']: ax3.spines[sp].set_color(ucharts.color('spine'))
+            ax3.set_xlim(0.3, 1.05)
+            ax3.set_ylim(0.3, 1.05)
+            ax3.grid(True, color=ucharts.color('surface'), linestyle='--', linewidth=0.5, alpha=0.6)
+            plt.tight_layout()
+            st.pyplot(fig3, transparent=True)
+            plt.close()
+
+
+    if 'Confusion Matrices' in _slot:
+        with _slot['Confusion Matrices']:
+            st.markdown("#### Confusion Matrices — All Models")
+            st.markdown('<div class="alert-info">0 = Low Risk (No Disease), 1 = High Risk (Disease)</div>',
+                        unsafe_allow_html=True)
+            cols_cm = st.columns(len(model_names))
+            sens_list, spec_list = [], []
+            for idx, (mn, col) in enumerate(zip(model_names, cols_cm)):
+                cm = results[mn]['conf_matrix']
+                tn, fp = cm[0][0], cm[0][1]
+                fn, tp = cm[1][0], cm[1][1]
+                sens = tp / (tp + fn) if (tp + fn) else 0
+                spec = tn / (tn + fp) if (tn + fp) else 0
+                sens_list.append(sens)
+                spec_list.append(spec)
+                with col:
+                    st.markdown(f"**{short_names[idx]}**")
+                    fig_cm, ax_cm = plt.subplots(figsize=(2.6, 2.2), facecolor='none')
+                    ax_cm.set_facecolor('none')
+                    cm_arr = [[tn, fp], [fn, tp]]
+                    _im_cm = ax_cm.imshow(cm_arr, cmap=ucharts.cmap('sequential', reverse=True),
+                                          aspect='auto', vmin=0)
+                    for r in range(2):
+                        for c_ in range(2):
+                            ax_cm.text(c_, r, str(cm_arr[r][c_]),
+                                       ha='center', va='center',
+                                       color=ucharts.on_color(_im_cm.cmap(_im_cm.norm(cm_arr[r][c_]))),
+                                       fontsize=10, fontweight='700')
+                    ax_cm.set_xticks([0, 1])
+                    ax_cm.set_yticks([0, 1])
+                    ax_cm.set_xticklabels(['P0', 'P1'], color=ucharts.color('fg'), fontsize=7)
+                    ax_cm.set_yticklabels(['A0', 'A1'], color=ucharts.color('fg'), fontsize=7)
+                    ax_cm.tick_params(length=0)
+                    plt.tight_layout(pad=0.3)
+                    st.pyplot(fig_cm, transparent=True)
+                    plt.close()
+                    st.markdown(f"""<div style="font-size:.72em;color:#6b7280;line-height:1.6;">
                 TP={tp} TN={tn} FP={fp} FN={fn}<br>
                 Sens:<b style="color:#10b981"> {sens:.1%}</b>
                 Spec:<b style="color:#3b82f6"> {spec:.1%}</b></div>""", unsafe_allow_html=True)
-        st.markdown("---")
-        st.markdown("#### Sensitivity vs Specificity")
-        fig_ss, ax_ss = plt.subplots(figsize=(8, 3.5), facecolor='none')
-        ax_ss.set_facecolor('none')
-        xr = range(len(model_names))
-        w = 0.35
-        bs = ax_ss.bar([i - w/2 for i in xr], sens_list, width=w, label='Sensitivity', color=ucharts.color('risk_high'), alpha=0.85)
-        bp = ax_ss.bar([i + w/2 for i in xr], spec_list, width=w, label='Specificity',  color=ucharts.color('primary'), alpha=0.85)
-        ax_ss.set_xticks(list(xr))
-        ax_ss.set_xticklabels(short_names, color=ucharts.color('fg'), fontsize=9)
-        ax_ss.set_ylim(0, 1.15)
-        ax_ss.tick_params(colors=ucharts.color('fg'), labelsize=8)
-        ax_ss.legend(facecolor=ucharts.color('surface'), labelcolor=ucharts.color('fg'), fontsize=9)
-        for sp in ['top', 'right']:   ax_ss.spines[sp].set_visible(False)
-        for sp in ['left', 'bottom']: ax_ss.spines[sp].set_color(ucharts.color('spine'))
-        for bar in list(bs) + list(bp):
-            ax_ss.annotate(f"{bar.get_height():.2f}",
-                           xy=(bar.get_x() + bar.get_width()/2, bar.get_height()),
-                           xytext=(0, 3), textcoords="offset points",
-                           ha='center', color=ucharts.color('fg'), fontsize=7.5, fontweight='600')
-        plt.tight_layout()
-        st.pyplot(fig_ss, transparent=True)
-        plt.close()
+            st.markdown("---")
+            st.markdown("#### Sensitivity vs Specificity")
+            fig_ss, ax_ss = plt.subplots(figsize=(8, 3.5), facecolor='none')
+            ax_ss.set_facecolor('none')
+            xr = range(len(model_names))
+            w = 0.35
+            bs = ax_ss.bar([i - w/2 for i in xr], sens_list, width=w, label='Sensitivity', color=ucharts.color('risk_high'), alpha=0.85)
+            bp = ax_ss.bar([i + w/2 for i in xr], spec_list, width=w, label='Specificity',  color=ucharts.color('primary'), alpha=0.85)
+            ax_ss.set_xticks(list(xr))
+            ax_ss.set_xticklabels(short_names, color=ucharts.color('fg'), fontsize=9)
+            ax_ss.set_ylim(0, 1.15)
+            ax_ss.tick_params(colors=ucharts.color('fg'), labelsize=8)
+            ax_ss.legend(facecolor=ucharts.color('surface'), labelcolor=ucharts.color('fg'), fontsize=9)
+            for sp in ['top', 'right']:   ax_ss.spines[sp].set_visible(False)
+            for sp in ['left', 'bottom']: ax_ss.spines[sp].set_color(ucharts.color('spine'))
+            for bar in list(bs) + list(bp):
+                ax_ss.annotate(f"{bar.get_height():.2f}",
+                               xy=(bar.get_x() + bar.get_width()/2, bar.get_height()),
+                               xytext=(0, 3), textcoords="offset points",
+                               ha='center', color=ucharts.color('fg'), fontsize=7.5, fontweight='600')
+            plt.tight_layout()
+            st.pyplot(fig_ss, transparent=True)
+            plt.close()
 
-    with t3:
-        st.markdown("#### Per-Class Classification Report")
-        sel_m = st.selectbox("Select Model", model_names)
-        rep   = results[sel_m].get('report', {})
-        rows  = []
-        for cls_key, cls_label in [("0", "Low Risk (Class 0)"), ("1", "High Risk (Class 1)"),
-                                    ("macro avg", "Macro Average"), ("weighted avg", "Weighted Average")]:
-            if cls_key in rep:
-                d = rep[cls_key]
-                rows.append({"Class": cls_label,
-                             "Precision": f"{d.get('precision',0):.4f}",
-                             "Recall":    f"{d.get('recall',0):.4f}",
-                             "F1-Score":  f"{d.get('f1-score',0):.4f}",
-                             "Support":   str(int(d.get('support',0)))})
-        if rows:
-            st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
-        st.markdown("---")
-        st.markdown("#### Full Summary — All Models")
-        all_rows = []
-        for mn in model_names:
-            r = results[mn]
-            c2 = r['conf_matrix']
-            tn2, fp2, fn2, tp2 = c2[0][0], c2[0][1], c2[1][0], c2[1][1]
-            all_rows.append({"Model": mn,
-                             "Accuracy": f"{r['accuracy']:.4f}", "AUC": f"{r['auc']:.4f}",
-                             "F1": f"{r['f1']:.4f}", "Precision": f"{r['precision']:.4f}",
-                             "Recall": f"{r['recall']:.4f}",
-                             "TP": tp2, "TN": tn2, "FP": fp2, "FN": fn2})
-        st.dataframe(pd.DataFrame(all_rows), hide_index=True, use_container_width=True)
-        st.download_button("Export as CSV", pd.DataFrame(all_rows).to_csv(index=False).encode(),
-                           "model_metrics.csv", "text/csv", use_container_width=True)
+    if 'Detailed Report' in _slot:
+        with _slot['Detailed Report']:
+            st.markdown("#### Per-Class Classification Report")
+            sel_m = st.selectbox("Select Model", model_names)
+            rep   = results[sel_m].get('report', {})
+            rows  = []
+            for cls_key, cls_label in [("0", "Low Risk (Class 0)"), ("1", "High Risk (Class 1)"),
+                                        ("macro avg", "Macro Average"), ("weighted avg", "Weighted Average")]:
+                if cls_key in rep:
+                    d = rep[cls_key]
+                    rows.append({"Class": cls_label,
+                                 "Precision": f"{d.get('precision',0):.4f}",
+                                 "Recall":    f"{d.get('recall',0):.4f}",
+                                 "F1-Score":  f"{d.get('f1-score',0):.4f}",
+                                 "Support":   str(int(d.get('support',0)))})
+            if rows:
+                st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+            st.markdown("---")
+            st.markdown("#### Full Summary — All Models")
+            all_rows = []
+            for mn in model_names:
+                r = results[mn]
+                c2 = r['conf_matrix']
+                tn2, fp2, fn2, tp2 = c2[0][0], c2[0][1], c2[1][0], c2[1][1]
+                all_rows.append({"Model": mn,
+                                 "Accuracy": f"{r['accuracy']:.4f}", "AUC": f"{r['auc']:.4f}",
+                                 "F1": f"{r['f1']:.4f}", "Precision": f"{r['precision']:.4f}",
+                                 "Recall": f"{r['recall']:.4f}",
+                                 "TP": tp2, "TN": tn2, "FP": fp2, "FN": fn2})
+            st.dataframe(pd.DataFrame(all_rows), hide_index=True, use_container_width=True)
+            st.download_button("Export as CSV", pd.DataFrame(all_rows).to_csv(index=False).encode(),
+                               "model_metrics.csv", "text/csv", use_container_width=True)
 
-    with t4:
-        model_info = [
-            ("Logistic Regression", "LR", "Linear probabilistic classifier. Fast and interpretable.", "High recall"),
-            ("Support Vector Machine (SVM)", "SVM", "Finds optimal hyperplane. Uses LinearSVC + calibration.", "Highest recall"),
-            ("Decision Tree", "DT", "Rule-based tree classifier. Highly interpretable.", "Balanced metrics"),
-            ("Random Forest", "RF", "Ensemble of 200 decision trees. Robust against overfitting.", "Best overall balance"),
-            ("XGBoost", "XGB", "Gradient-boosted trees — gold standard for tabular data.", "High accuracy"),
-        ]
-        for i, (name, short, desc, strength) in enumerate(model_info):
-            bc = colors_bar[i]
-            r  = results.get(name, {})
-            tag = "*** BEST *** " if name == best_name else ""
-            st.markdown(f"""
+    if 'Model Info' in _slot:
+        with _slot['Model Info']:
+            model_info = [
+                ("Logistic Regression", "LR", "Linear probabilistic classifier. Fast and interpretable.", "High recall"),
+                ("Support Vector Machine (SVM)", "SVM", "Finds optimal hyperplane. Uses LinearSVC + calibration.", "Highest recall"),
+                ("Decision Tree", "DT", "Rule-based tree classifier. Highly interpretable.", "Balanced metrics"),
+                ("Random Forest", "RF", "Ensemble of 200 decision trees. Robust against overfitting.", "Best overall balance"),
+                ("XGBoost", "XGB", "Gradient-boosted trees — gold standard for tabular data.", "High accuracy"),
+            ]
+            for i, (name, short, desc, strength) in enumerate(model_info):
+                bc = colors_bar[i]
+                r  = results.get(name, {})
+                tag = "*** BEST *** " if name == best_name else ""
+                st.markdown(f"""
             <div class="panel" style="border-left:4px solid {bc};margin-bottom:12px;">
               <div style="display:flex;justify-content:space-between;align-items:center;">
                 <div>
@@ -2299,7 +2366,7 @@ def page_model_performance(user):
               <div style="color:#6b7280;font-size:.85em;margin-top:6px;">{desc}</div>
               <div style="color:#10b981;font-size:.8em;margin-top:4px;font-weight:600;">Strength: {strength}</div>
             </div>""", unsafe_allow_html=True)
-        st.markdown("""
+            st.markdown("""
         <div class="panel"><h4 style="color:#3b82f6;">Dataset &amp; Preprocessing</h4>
 
         | Step | Detail |
@@ -2316,489 +2383,492 @@ def page_model_performance(user):
     # ────────────────────────────────────────────────────────────
     # TAB 5 — Feature Importance
     # ────────────────────────────────────────────────────────────
-    with t5:
-        st.markdown("#### Feature Importance — Per Model")
-        st.markdown(
-            '<div class="alert-info">Shows which clinical features most influence each model\'s predictions. '
-            'For LR/SVM the absolute coefficient values are used as a proxy for importance.</div>',
-            unsafe_allow_html=True)
-
-        # Load feature names
-        feat_path = os.path.join(MODELS_DIR, "features.json")
-        if os.path.exists(feat_path):
-            with open(feat_path) as _f:
-                feature_names = json.load(_f)
-        else:
-            feature_names = ["age","gender","height","weight","ap_hi","ap_lo",
-                             "cholesterol","gluc","smoke","alco","active",
-                             "bmi","pulse_pressure","age_group","high_risk_flag"]
-
-        # Friendly display names
-        feat_labels = {
-            "age": "Age", "gender": "Gender", "height": "Height", "weight": "Weight",
-            "ap_hi": "Systolic BP", "ap_lo": "Diastolic BP",
-            "cholesterol": "Cholesterol", "gluc": "Glucose",
-            "smoke": "Smoker", "alco": "Alcohol", "active": "Physically Active",
-            "bmi": "BMI", "pulse_pressure": "Pulse Pressure",
-            "age_group": "Age Group", "high_risk_flag": "High Risk Flag"
-        }
-        display_names = [feat_labels.get(f, f) for f in feature_names]
-
-        # Models that support feature importance
-        fi_model_files = {
-            "Random Forest":               "random_forest.pkl",
-            "XGBoost":                     "xgboost.pkl",
-            "Decision Tree":               "decision_tree.pkl",
-            "Logistic Regression":         "logistic_regression.pkl",
-            "Support Vector Machine (SVM)": "svm.pkl",
-        }
-
-        fi_sel = st.selectbox(
-            "Select Model for Feature Importance",
-            [m for m in model_names if m in fi_model_files]
-        )
-
-        model_file = os.path.join(MODELS_DIR, fi_model_files[fi_sel])
-        fi_values = None
-        fi_note   = ""
-
-        if os.path.exists(model_file):
-            try:
-                with open(model_file, "rb") as _mf:
-                    _model = pickle.load(_mf)
-
-                if hasattr(_model, "feature_importances_"):
-                    fi_values = _model.feature_importances_
-                    fi_note   = "Gini impurity-based importance (higher = more influential)"
-                elif hasattr(_model, "coef_"):
-                    fi_values = np.abs(_model.coef_[0])
-                    fi_note   = "Absolute value of model coefficients used as importance proxy"
-                elif hasattr(_model, "calibrated_classifiers_"):
-                    # CalibratedClassifierCV wrapping LinearSVC
-                    base = _model.calibrated_classifiers_[0].estimator
-                    if hasattr(base, "coef_"):
-                        fi_values = np.abs(base.coef_[0])
-                        fi_note   = "Absolute SVM coefficients (LinearSVC) used as importance proxy"
-            except Exception as _e:
-                st.error(f"Could not load model: {_e}")
-        else:
-            st.warning(f"Model file not found: {fi_model_files[fi_sel]}")
-
-        if fi_values is not None and len(fi_values) == len(feature_names):
-            # Normalize
-            fi_norm = fi_values / (fi_values.sum() + 1e-9)
-            sorted_ii = np.argsort(fi_norm)[::-1]
-            sorted_labels = [display_names[i] for i in sorted_ii]
-            sorted_vals   = fi_norm[sorted_ii]
-
-            # Colour gradient from red (most important) to blue (least)
-            # FIXED (BUG-01): matplotlib-safe hex, not CSS rgba() strings.
-            bar_colors = [gradient_hex(j, len(sorted_ii)) for j in range(len(sorted_ii))]
-
-            fig_fi, ax_fi = plt.subplots(figsize=(9, max(5, len(feature_names)*0.45)),
-                                         facecolor='none')
-            ax_fi.set_facecolor('none')
-            bars_fi = ax_fi.barh(sorted_labels[::-1], sorted_vals[::-1],
-                                  color=bar_colors[::-1], height=0.65)
-            ax_fi.set_xlabel("Normalised Importance", color=ucharts.color('fg'), fontsize=9)
-            ax_fi.set_title(f"Feature Importance — {fi_sel}", color=ucharts.color('fg'),
-                             fontsize=10, fontweight='700', pad=10)
-            ax_fi.tick_params(colors=ucharts.color('fg'), labelsize=8)
-            for sp in ['top', 'right']:   ax_fi.spines[sp].set_visible(False)
-            for sp in ['left', 'bottom']: ax_fi.spines[sp].set_color(ucharts.color('spine'))
-            for bar in bars_fi:
-                ax_fi.text(bar.get_width() + 0.002,
-                           bar.get_y() + bar.get_height()/2,
-                           f"{bar.get_width():.3f}",
-                           va='center', color=ucharts.color('fg'), fontsize=7.5, fontweight='600')
-            plt.tight_layout()
-            st.pyplot(fig_fi, transparent=True)
-            plt.close()
-
-            if fi_note:
-                st.markdown(f'<div class="alert-info" style="font-size:.82em;">{fi_note}</div>',
-                            unsafe_allow_html=True)
-
-            st.markdown("---")
-            st.markdown("#### Top Features Ranked Table")
-            fi_df = pd.DataFrame({
-                "Rank":      list(range(1, len(sorted_ii)+1)),
-                "Feature":   sorted_labels,
-                "Importance (normalised)": [f"{v:.4f}" for v in sorted_vals],
-                "Importance (%)": [f"{v*100:.2f}%" for v in sorted_vals],
-            })
-            st.dataframe(fi_df, hide_index=True, use_container_width=True)
-
-            # ── Cumulative Importance Curve ───────────────────────────
-            st.markdown("---")
-            st.markdown("#### Cumulative Feature Importance Curve")
+    if 'Feature Importance' in _slot:
+        with _slot['Feature Importance']:
+            st.markdown("#### Feature Importance — Per Model")
             st.markdown(
-                '<div class="alert-info">Shows how many top features are needed to explain '
+                '<div class="alert-info">Shows which clinical features most influence each model\'s predictions. '
+            'For LR/SVM the absolute coefficient values are used as a proxy for importance.</div>',
+                unsafe_allow_html=True)
+
+            # Load feature names
+            feat_path = os.path.join(MODELS_DIR, "features.json")
+            if os.path.exists(feat_path):
+                with open(feat_path) as _f:
+                    feature_names = json.load(_f)
+            else:
+                feature_names = ["age","gender","height","weight","ap_hi","ap_lo",
+                                 "cholesterol","gluc","smoke","alco","active",
+                                 "bmi","pulse_pressure","age_group","high_risk_flag"]
+
+            # Friendly display names
+            feat_labels = {
+                "age": "Age", "gender": "Gender", "height": "Height", "weight": "Weight",
+                "ap_hi": "Systolic BP", "ap_lo": "Diastolic BP",
+                "cholesterol": "Cholesterol", "gluc": "Glucose",
+                "smoke": "Smoker", "alco": "Alcohol", "active": "Physically Active",
+                "bmi": "BMI", "pulse_pressure": "Pulse Pressure",
+                "age_group": "Age Group", "high_risk_flag": "High Risk Flag"
+            }
+            display_names = [feat_labels.get(f, f) for f in feature_names]
+
+            # Models that support feature importance
+            fi_model_files = {
+                "Random Forest":               "random_forest.pkl",
+                "XGBoost":                     "xgboost.pkl",
+                "Decision Tree":               "decision_tree.pkl",
+                "Logistic Regression":         "logistic_regression.pkl",
+                "Support Vector Machine (SVM)": "svm.pkl",
+            }
+
+            fi_sel = st.selectbox(
+                "Select Model for Feature Importance",
+                [m for m in model_names if m in fi_model_files]
+            )
+
+            model_file = os.path.join(MODELS_DIR, fi_model_files[fi_sel])
+            fi_values = None
+            fi_note   = ""
+
+            if os.path.exists(model_file):
+                try:
+                    with open(model_file, "rb") as _mf:
+                        _model = pickle.load(_mf)
+
+                    if hasattr(_model, "feature_importances_"):
+                        fi_values = _model.feature_importances_
+                        fi_note   = "Gini impurity-based importance (higher = more influential)"
+                    elif hasattr(_model, "coef_"):
+                        fi_values = np.abs(_model.coef_[0])
+                        fi_note   = "Absolute value of model coefficients used as importance proxy"
+                    elif hasattr(_model, "calibrated_classifiers_"):
+                        # CalibratedClassifierCV wrapping LinearSVC
+                        base = _model.calibrated_classifiers_[0].estimator
+                        if hasattr(base, "coef_"):
+                            fi_values = np.abs(base.coef_[0])
+                            fi_note   = "Absolute SVM coefficients (LinearSVC) used as importance proxy"
+                except Exception as _e:
+                    st.error(f"Could not load model: {_e}")
+            else:
+                st.warning(f"Model file not found: {fi_model_files[fi_sel]}")
+
+            if fi_values is not None and len(fi_values) == len(feature_names):
+                # Normalize
+                fi_norm = fi_values / (fi_values.sum() + 1e-9)
+                sorted_ii = np.argsort(fi_norm)[::-1]
+                sorted_labels = [display_names[i] for i in sorted_ii]
+                sorted_vals   = fi_norm[sorted_ii]
+
+                # Colour gradient from red (most important) to blue (least)
+                # FIXED (BUG-01): matplotlib-safe hex, not CSS rgba() strings.
+                bar_colors = [gradient_hex(j, len(sorted_ii)) for j in range(len(sorted_ii))]
+
+                fig_fi, ax_fi = plt.subplots(figsize=(9, max(5, len(feature_names)*0.45)),
+                                             facecolor='none')
+                ax_fi.set_facecolor('none')
+                bars_fi = ax_fi.barh(sorted_labels[::-1], sorted_vals[::-1],
+                                      color=bar_colors[::-1], height=0.65)
+                ax_fi.set_xlabel("Normalised Importance", color=ucharts.color('fg'), fontsize=9)
+                ax_fi.set_title(f"Feature Importance — {fi_sel}", color=ucharts.color('fg'),
+                                 fontsize=10, fontweight='700', pad=10)
+                ax_fi.tick_params(colors=ucharts.color('fg'), labelsize=8)
+                for sp in ['top', 'right']:   ax_fi.spines[sp].set_visible(False)
+                for sp in ['left', 'bottom']: ax_fi.spines[sp].set_color(ucharts.color('spine'))
+                for bar in bars_fi:
+                    ax_fi.text(bar.get_width() + 0.002,
+                               bar.get_y() + bar.get_height()/2,
+                               f"{bar.get_width():.3f}",
+                               va='center', color=ucharts.color('fg'), fontsize=7.5, fontweight='600')
+                plt.tight_layout()
+                st.pyplot(fig_fi, transparent=True)
+                plt.close()
+
+                if fi_note:
+                    st.markdown(f'<div class="alert-info" style="font-size:.82em;">{fi_note}</div>',
+                                unsafe_allow_html=True)
+
+                st.markdown("---")
+                st.markdown("#### Top Features Ranked Table")
+                fi_df = pd.DataFrame({
+                    "Rank":      list(range(1, len(sorted_ii)+1)),
+                    "Feature":   sorted_labels,
+                    "Importance (normalised)": [f"{v:.4f}" for v in sorted_vals],
+                    "Importance (%)": [f"{v*100:.2f}%" for v in sorted_vals],
+                })
+                st.dataframe(fi_df, hide_index=True, use_container_width=True)
+
+                # ── Cumulative Importance Curve ───────────────────────────
+                st.markdown("---")
+                st.markdown("#### Cumulative Feature Importance Curve")
+                st.markdown(
+                    '<div class="alert-info">Shows how many top features are needed to explain '
                 'a given percentage of the total model importance. '
                 'Steeper = fewer features dominate the model.</div>',
-                unsafe_allow_html=True)
-            cumul = np.cumsum(sorted_vals)
-            fig_cum, ax_cum = plt.subplots(figsize=(8, 3.5), facecolor='none')
-            ax_cum.set_facecolor('none')
-            ax_cum.plot(range(1, len(cumul)+1), cumul * 100,
-                        color=ucharts.color('series_random_forest'), linewidth=2.5, marker='o', markersize=4)
-            ax_cum.fill_between(range(1, len(cumul)+1), cumul * 100,
-                                alpha=0.15, color=ucharts.color('series_random_forest'))
-            # Mark 80%, 90%, 95% thresholds
-            for thresh, col, lbl in [(0.80, ucharts.color('risk_borderline'), '80%'),
-                                      (0.90, ucharts.color('risk_high'), '90%'),
-                                      (0.95, ucharts.color('risk_low'), '95%')]:
-                idx_t = next((i for i, v in enumerate(cumul) if v >= thresh), len(cumul)-1)
-                ax_cum.axhline(thresh*100, color=col, linestyle='--', linewidth=1.2, alpha=0.7)
-                ax_cum.axvline(idx_t+1, color=col, linestyle='--', linewidth=1.2, alpha=0.7)
-                ax_cum.annotate(f'{lbl} @ top-{idx_t+1}',
-                                xy=(idx_t+1, thresh*100),
-                                xytext=(idx_t+1.3, thresh*100-4),
-                                color=col, fontsize=7.5, fontweight='700')
-            ax_cum.set_xlabel("Number of Top Features", color=ucharts.color('fg'), fontsize=9)
-            ax_cum.set_ylabel("Cumulative Importance (%)", color=ucharts.color('fg'), fontsize=9)
-            ax_cum.set_xlim(1, len(cumul))
-            ax_cum.set_ylim(0, 105)
-            ax_cum.tick_params(colors=ucharts.color('fg'), labelsize=8)
-            for sp in ['top', 'right']:   ax_cum.spines[sp].set_visible(False)
-            for sp in ['left', 'bottom']: ax_cum.spines[sp].set_color(ucharts.color('spine'))
-            ax_cum.grid(True, color=ucharts.color('surface'), linestyle='--', linewidth=0.5, alpha=0.6)
-            plt.tight_layout()
-            st.pyplot(fig_cum, transparent=True)
-            plt.close()
-
-            st.markdown("---")
-            st.markdown("#### Top-5 Features Comparison Across Tree Models")
-            st.markdown('<div class="alert-info">Compares top-5 features for Random Forest, XGBoost, and Decision Tree.</div>',
-                        unsafe_allow_html=True)
-
-            tree_models = {
-                "RF":  ("random_forest.pkl",  ucharts.color('risk_low')),
-                "XGB": ("xgboost.pkl",         ucharts.color('series_random_forest')),
-                "DT":  ("decision_tree.pkl",    ucharts.color('risk_borderline')),
-            }
-            top5_data = {}
-            for short_lbl, (fname, _col) in tree_models.items():
-                fpath = os.path.join(MODELS_DIR, fname)
-                if os.path.exists(fpath):
-                    try:
-                        with open(fpath, "rb") as _ff:
-                            _tm = pickle.load(_ff)
-                        if hasattr(_tm, "feature_importances_"):
-                            _fi = _tm.feature_importances_
-                            _fi_norm = _fi / (_fi.sum() + 1e-9)
-                            _top5_idx = np.argsort(_fi_norm)[::-1][:5]
-                            top5_data[short_lbl] = {
-                                display_names[i]: _fi_norm[i] for i in _top5_idx
-                            }
-                    except Exception:
-                        pass
-
-            if top5_data:
-                all_top_feats = list(dict.fromkeys(
-                    feat for d in top5_data.values() for feat in d
-                ))
-                fig_cmp, ax_cmp = plt.subplots(figsize=(9, 4), facecolor='none')
-                ax_cmp.set_facecolor('none')
-                x_cmp = np.arange(len(all_top_feats))
-                w_cmp = 0.25
-                clr_list = ucharts.categorical(3)
-                for idx_m, (short_lbl, d) in enumerate(top5_data.items()):
-                    vals_cmp = [d.get(f, 0) for f in all_top_feats]
-                    offset = (idx_m - 1) * w_cmp
-                    ax_cmp.bar(x_cmp + offset, vals_cmp,
-                               width=w_cmp, label=short_lbl,
-                               color=clr_list[idx_m], alpha=0.85)
-                ax_cmp.set_xticks(x_cmp)
-                ax_cmp.set_xticklabels(all_top_feats, rotation=25, ha='right',
-                                        color=ucharts.color('fg'), fontsize=8)
-                ax_cmp.tick_params(colors=ucharts.color('fg'), labelsize=8)
-                ax_cmp.legend(facecolor=ucharts.color('surface'), labelcolor=ucharts.color('fg'), fontsize=9)
-                for sp in ['top', 'right']:   ax_cmp.spines[sp].set_visible(False)
-                for sp in ['left', 'bottom']: ax_cmp.spines[sp].set_color(ucharts.color('spine'))
-                ax_cmp.set_ylabel("Importance", color=ucharts.color('fg'), fontsize=9)
+                    unsafe_allow_html=True)
+                cumul = np.cumsum(sorted_vals)
+                fig_cum, ax_cum = plt.subplots(figsize=(8, 3.5), facecolor='none')
+                ax_cum.set_facecolor('none')
+                ax_cum.plot(range(1, len(cumul)+1), cumul * 100,
+                            color=ucharts.color('series_random_forest'), linewidth=2.5, marker='o', markersize=4)
+                ax_cum.fill_between(range(1, len(cumul)+1), cumul * 100,
+                                    alpha=0.15, color=ucharts.color('series_random_forest'))
+                # Mark 80%, 90%, 95% thresholds
+                for thresh, col, lbl in [(0.80, ucharts.color('risk_borderline'), '80%'),
+                                          (0.90, ucharts.color('risk_high'), '90%'),
+                                          (0.95, ucharts.color('risk_low'), '95%')]:
+                    idx_t = next((i for i, v in enumerate(cumul) if v >= thresh), len(cumul)-1)
+                    ax_cum.axhline(thresh*100, color=col, linestyle='--', linewidth=1.2, alpha=0.7)
+                    ax_cum.axvline(idx_t+1, color=col, linestyle='--', linewidth=1.2, alpha=0.7)
+                    ax_cum.annotate(f'{lbl} @ top-{idx_t+1}',
+                                    xy=(idx_t+1, thresh*100),
+                                    xytext=(idx_t+1.3, thresh*100-4),
+                                    color=col, fontsize=7.5, fontweight='700')
+                ax_cum.set_xlabel("Number of Top Features", color=ucharts.color('fg'), fontsize=9)
+                ax_cum.set_ylabel("Cumulative Importance (%)", color=ucharts.color('fg'), fontsize=9)
+                ax_cum.set_xlim(1, len(cumul))
+                ax_cum.set_ylim(0, 105)
+                ax_cum.tick_params(colors=ucharts.color('fg'), labelsize=8)
+                for sp in ['top', 'right']:   ax_cum.spines[sp].set_visible(False)
+                for sp in ['left', 'bottom']: ax_cum.spines[sp].set_color(ucharts.color('spine'))
+                ax_cum.grid(True, color=ucharts.color('surface'), linestyle='--', linewidth=0.5, alpha=0.6)
                 plt.tight_layout()
-                st.pyplot(fig_cmp, transparent=True)
+                st.pyplot(fig_cum, transparent=True)
                 plt.close()
 
-            # ── All-Models Feature Importance Heatmap ────────────────
-            st.markdown("---")
-            st.markdown("#### Feature Importance Heatmap — All Tree Models")
-            st.markdown(
-                '<div class="alert-info">Heatmap of normalised feature importances across '
+                st.markdown("---")
+                st.markdown("#### Top-5 Features Comparison Across Tree Models")
+                st.markdown('<div class="alert-info">Compares top-5 features for Random Forest, XGBoost, and Decision Tree.</div>',
+                            unsafe_allow_html=True)
+
+                tree_models = {
+                    "RF":  ("random_forest.pkl",  ucharts.color('risk_low')),
+                    "XGB": ("xgboost.pkl",         ucharts.color('series_random_forest')),
+                    "DT":  ("decision_tree.pkl",    ucharts.color('risk_borderline')),
+                }
+                top5_data = {}
+                for short_lbl, (fname, _col) in tree_models.items():
+                    fpath = os.path.join(MODELS_DIR, fname)
+                    if os.path.exists(fpath):
+                        try:
+                            with open(fpath, "rb") as _ff:
+                                _tm = pickle.load(_ff)
+                            if hasattr(_tm, "feature_importances_"):
+                                _fi = _tm.feature_importances_
+                                _fi_norm = _fi / (_fi.sum() + 1e-9)
+                                _top5_idx = np.argsort(_fi_norm)[::-1][:5]
+                                top5_data[short_lbl] = {
+                                    display_names[i]: _fi_norm[i] for i in _top5_idx
+                                }
+                        except Exception:
+                            pass
+
+                if top5_data:
+                    all_top_feats = list(dict.fromkeys(
+                        feat for d in top5_data.values() for feat in d
+                    ))
+                    fig_cmp, ax_cmp = plt.subplots(figsize=(9, 4), facecolor='none')
+                    ax_cmp.set_facecolor('none')
+                    x_cmp = np.arange(len(all_top_feats))
+                    w_cmp = 0.25
+                    clr_list = ucharts.categorical(3)
+                    for idx_m, (short_lbl, d) in enumerate(top5_data.items()):
+                        vals_cmp = [d.get(f, 0) for f in all_top_feats]
+                        offset = (idx_m - 1) * w_cmp
+                        ax_cmp.bar(x_cmp + offset, vals_cmp,
+                                   width=w_cmp, label=short_lbl,
+                                   color=clr_list[idx_m], alpha=0.85)
+                    ax_cmp.set_xticks(x_cmp)
+                    ax_cmp.set_xticklabels(all_top_feats, rotation=25, ha='right',
+                                            color=ucharts.color('fg'), fontsize=8)
+                    ax_cmp.tick_params(colors=ucharts.color('fg'), labelsize=8)
+                    ax_cmp.legend(facecolor=ucharts.color('surface'), labelcolor=ucharts.color('fg'), fontsize=9)
+                    for sp in ['top', 'right']:   ax_cmp.spines[sp].set_visible(False)
+                    for sp in ['left', 'bottom']: ax_cmp.spines[sp].set_color(ucharts.color('spine'))
+                    ax_cmp.set_ylabel("Importance", color=ucharts.color('fg'), fontsize=9)
+                    plt.tight_layout()
+                    st.pyplot(fig_cmp, transparent=True)
+                    plt.close()
+
+                # ── All-Models Feature Importance Heatmap ────────────────
+                st.markdown("---")
+                st.markdown("#### Feature Importance Heatmap — All Tree Models")
+                st.markdown(
+                    '<div class="alert-info">Heatmap of normalised feature importances across '
                 'Random Forest, XGBoost and Decision Tree. Darker red = higher importance.</div>',
-                unsafe_allow_html=True)
-            all_tree_files = {
-                "Random Forest": "random_forest.pkl",
-                "XGBoost":       "xgboost.pkl",
-                "Decision Tree": "decision_tree.pkl",
-            }
-            hm_data = {}   # model_name -> np array of normalised importances
-            for _mn, _fn in all_tree_files.items():
-                _fp = os.path.join(MODELS_DIR, _fn)
-                if os.path.exists(_fp):
-                    try:
-                        with open(_fp, "rb") as _ff2:
-                            _tm2 = pickle.load(_ff2)
-                        if hasattr(_tm2, "feature_importances_"):
-                            _fiv = _tm2.feature_importances_
-                            hm_data[_mn] = _fiv / (_fiv.sum() + 1e-9)
-                    except Exception:
-                        pass
-            if len(hm_data) >= 2:
-                hm_matrix = np.array([hm_data[k] for k in hm_data])
-                hm_labels  = list(hm_data.keys())
-                fig_hm, ax_hm = plt.subplots(
-                    figsize=(11, max(3, len(feature_names)*0.38)),
-                    facecolor='none')
-                ax_hm.set_facecolor('none')
-                im = ax_hm.imshow(hm_matrix, cmap=ucharts.cmap('sequential'), aspect='auto')
-                ax_hm.set_xticks(range(len(feature_names)))
-                ax_hm.set_xticklabels(display_names, rotation=40, ha='right',
-                                       color=ucharts.color('fg'), fontsize=7.5)
-                ax_hm.set_yticks(range(len(hm_labels)))
-                ax_hm.set_yticklabels(hm_labels, color=ucharts.color('fg'), fontsize=8)
-                for r in range(len(hm_labels)):
-                    for c in range(len(feature_names)):
-                        val = hm_matrix[r, c]
-                        txt_col = ucharts.on_color(im.cmap(im.norm(val)))
-                        ax_hm.text(c, r, f"{val:.3f}",
-                                   ha='center', va='center',
-                                   color=txt_col, fontsize=6.5, fontweight='600')
-                cb = plt.colorbar(im, ax=ax_hm, fraction=0.025, pad=0.02)
-                cb.ax.tick_params(colors=ucharts.color('fg'), labelsize=7)
-                cb.set_label('Normalised Importance', color=ucharts.color('fg'), fontsize=8)
-                plt.tight_layout()
-                st.pyplot(fig_hm, transparent=True)
-                plt.close()
-        else:
-            st.warning("Feature importance could not be extracted for this model.")
+                    unsafe_allow_html=True)
+                all_tree_files = {
+                    "Random Forest": "random_forest.pkl",
+                    "XGBoost":       "xgboost.pkl",
+                    "Decision Tree": "decision_tree.pkl",
+                }
+                hm_data = {}   # model_name -> np array of normalised importances
+                for _mn, _fn in all_tree_files.items():
+                    _fp = os.path.join(MODELS_DIR, _fn)
+                    if os.path.exists(_fp):
+                        try:
+                            with open(_fp, "rb") as _ff2:
+                                _tm2 = pickle.load(_ff2)
+                            if hasattr(_tm2, "feature_importances_"):
+                                _fiv = _tm2.feature_importances_
+                                hm_data[_mn] = _fiv / (_fiv.sum() + 1e-9)
+                        except Exception:
+                            pass
+                if len(hm_data) >= 2:
+                    hm_matrix = np.array([hm_data[k] for k in hm_data])
+                    hm_labels  = list(hm_data.keys())
+                    fig_hm, ax_hm = plt.subplots(
+                        figsize=(11, max(3, len(feature_names)*0.38)),
+                        facecolor='none')
+                    ax_hm.set_facecolor('none')
+                    im = ax_hm.imshow(hm_matrix, cmap=ucharts.cmap('sequential'), aspect='auto')
+                    ax_hm.set_xticks(range(len(feature_names)))
+                    ax_hm.set_xticklabels(display_names, rotation=40, ha='right',
+                                           color=ucharts.color('fg'), fontsize=7.5)
+                    ax_hm.set_yticks(range(len(hm_labels)))
+                    ax_hm.set_yticklabels(hm_labels, color=ucharts.color('fg'), fontsize=8)
+                    for r in range(len(hm_labels)):
+                        for c in range(len(feature_names)):
+                            val = hm_matrix[r, c]
+                            txt_col = ucharts.on_color(im.cmap(im.norm(val)))
+                            ax_hm.text(c, r, f"{val:.3f}",
+                                       ha='center', va='center',
+                                       color=txt_col, fontsize=6.5, fontweight='600')
+                    cb = plt.colorbar(im, ax=ax_hm, fraction=0.025, pad=0.02)
+                    cb.ax.tick_params(colors=ucharts.color('fg'), labelsize=7)
+                    cb.set_label('Normalised Importance', color=ucharts.color('fg'), fontsize=8)
+                    plt.tight_layout()
+                    st.pyplot(fig_hm, transparent=True)
+                    plt.close()
+            else:
+                st.warning("Feature importance could not be extracted for this model.")
 
     # ══════════════════════════════════════════════════════════════════
     # TAB 6 — ROC Curve, Precision-Recall Curve, Confusion Matrix
     # ══════════════════════════════════════════════════════════════════
-    with t6:
-        st.markdown("#### ROC Curve · Precision-Recall Curve · Confusion Matrix")
+    if 'ROC & PR Curves' in _slot:
+        with _slot['ROC & PR Curves']:
+            st.markdown("#### ROC Curve · Precision-Recall Curve · Confusion Matrix")
 
-        # Check if new-style curve data exists (requires re-training)
-        has_curves = any("roc_curve" in results[m] for m in model_names)
-        if not has_curves:
-            st.markdown(
-                '<div class="alert-warning">Curve data not found in results.json. '
+            # Check if new-style curve data exists (requires re-training)
+            has_curves = any("roc_curve" in results[m] for m in model_names)
+            if not has_curves:
+                st.markdown(
+                    '<div class="alert-warning">Curve data not found in results.json. '
                 'Please ask SuperAdmin to <b>re-run model training</b> so ROC/PR curves are saved.</div>',
-                unsafe_allow_html=True)
-        else:
-            # ── 1. ROC CURVE ──────────────────────────────────────────────
-            st.markdown("### ROC Curve — All Models")
-            st.markdown(
-                '<div class="alert-info">ROC Curve shows the trade-off between True Positive Rate '
+                    unsafe_allow_html=True)
+            else:
+                # ── 1. ROC CURVE ──────────────────────────────────────────────
+                st.markdown("### ROC Curve — All Models")
+                st.markdown(
+                    '<div class="alert-info">ROC Curve shows the trade-off between True Positive Rate '
                 '(Sensitivity) and False Positive Rate at different thresholds. '
                 'Higher AUC = better discrimination ability.</div>',
-                unsafe_allow_html=True)
+                    unsafe_allow_html=True)
 
-            fig_roc, ax_roc = plt.subplots(figsize=(8, 5.5), facecolor='none')
-            ax_roc.set_facecolor('none')
+                fig_roc, ax_roc = plt.subplots(figsize=(8, 5.5), facecolor='none')
+                ax_roc.set_facecolor('none')
 
-            for i, mn in enumerate(model_names):
-                rcd = results[mn].get("roc_curve", {})
-                if rcd:
-                    fpr_v = rcd["fpr"]
-                    tpr_v = rcd["tpr"]
-                    auc_v = results[mn]["auc"]
-                    ax_roc.plot(fpr_v, tpr_v,
-                                color=colors_bar[i], linewidth=2.2,
-                                label=f"{short_names[i]} — AUC = {auc_v:.4f}")
+                for i, mn in enumerate(model_names):
+                    rcd = results[mn].get("roc_curve", {})
+                    if rcd:
+                        fpr_v = rcd["fpr"]
+                        tpr_v = rcd["tpr"]
+                        auc_v = results[mn]["auc"]
+                        ax_roc.plot(fpr_v, tpr_v,
+                                    color=colors_bar[i], linewidth=2.2,
+                                    label=f"{short_names[i]} — AUC = {auc_v:.4f}")
 
-            # Diagonal chance line
-            ax_roc.plot([0, 1], [0, 1], color=ucharts.color('fg_subtle'), linestyle='--',
-                        linewidth=1.2, label='Random Chance (AUC=0.5)')
-            ax_roc.fill_between([0, 1], [0, 1], alpha=0.04, color=ucharts.color('fg_subtle'))
+                # Diagonal chance line
+                ax_roc.plot([0, 1], [0, 1], color=ucharts.color('fg_subtle'), linestyle='--',
+                            linewidth=1.2, label='Random Chance (AUC=0.5)')
+                ax_roc.fill_between([0, 1], [0, 1], alpha=0.04, color=ucharts.color('fg_subtle'))
 
-            ax_roc.set_xlabel("False Positive Rate (1 - Specificity)",
-                              color=ucharts.color('fg'), fontsize=10)
-            ax_roc.set_ylabel("True Positive Rate (Sensitivity)",
-                               color=ucharts.color('fg'), fontsize=10)
-            ax_roc.set_title("ROC Curve — All Models",
-                             color=ucharts.color('fg'), fontsize=12, fontweight='700', pad=12)
-            ax_roc.set_xlim(0, 1); ax_roc.set_ylim(0, 1.02)
-            ax_roc.tick_params(colors=ucharts.color('fg'), labelsize=9)
-            ax_roc.legend(facecolor=ucharts.color('surface'), labelcolor=ucharts.color('fg'),
-                          fontsize=9, loc='lower right',
-                          framealpha=0.8, edgecolor=ucharts.color('grid'))
-            for sp in ['top', 'right']:   ax_roc.spines[sp].set_visible(False)
-            for sp in ['left', 'bottom']: ax_roc.spines[sp].set_color(ucharts.color('spine'))
-            ax_roc.grid(True, color=ucharts.color('surface'), linestyle='--', linewidth=0.5, alpha=0.7)
-            plt.tight_layout()
-            st.pyplot(fig_roc, transparent=True)
-            plt.close()
+                ax_roc.set_xlabel("False Positive Rate (1 - Specificity)",
+                                  color=ucharts.color('fg'), fontsize=10)
+                ax_roc.set_ylabel("True Positive Rate (Sensitivity)",
+                                   color=ucharts.color('fg'), fontsize=10)
+                ax_roc.set_title("ROC Curve — All Models",
+                                 color=ucharts.color('fg'), fontsize=12, fontweight='700', pad=12)
+                ax_roc.set_xlim(0, 1); ax_roc.set_ylim(0, 1.02)
+                ax_roc.tick_params(colors=ucharts.color('fg'), labelsize=9)
+                ax_roc.legend(facecolor=ucharts.color('surface'), labelcolor=ucharts.color('fg'),
+                              fontsize=9, loc='lower right',
+                              framealpha=0.8, edgecolor=ucharts.color('grid'))
+                for sp in ['top', 'right']:   ax_roc.spines[sp].set_visible(False)
+                for sp in ['left', 'bottom']: ax_roc.spines[sp].set_color(ucharts.color('spine'))
+                ax_roc.grid(True, color=ucharts.color('surface'), linestyle='--', linewidth=0.5, alpha=0.7)
+                plt.tight_layout()
+                st.pyplot(fig_roc, transparent=True)
+                plt.close()
 
-            st.markdown("---")
+                st.markdown("---")
 
-            # ── 2. PRECISION-RECALL CURVE ────────────────────────────────
-            st.markdown("### Precision-Recall Curve — All Models")
-            st.markdown(
-                '<div class="alert-info">PR Curve is especially useful for imbalanced datasets. '
+                # ── 2. PRECISION-RECALL CURVE ────────────────────────────────
+                st.markdown("### Precision-Recall Curve — All Models")
+                st.markdown(
+                    '<div class="alert-info">PR Curve is especially useful for imbalanced datasets. '
                 'Average Precision (AP) summarises the area under the PR curve — higher is better. '
                 'The baseline is the positive class prevalence in the test set.</div>',
-                unsafe_allow_html=True)
+                    unsafe_allow_html=True)
 
-            # Compute baseline (prevalence of class 1)
-            total_pos = 0; total_all = 0
-            for mn in model_names:
-                cm_d = results[mn].get("conf_matrix", [[0,0],[0,0]])
-                total_pos += cm_d[1][0] + cm_d[1][1]
-                total_all += cm_d[0][0] + cm_d[0][1] + cm_d[1][0] + cm_d[1][1]
-            baseline_prev = total_pos / max(total_all, 1)
+                # Compute baseline (prevalence of class 1)
+                total_pos = 0; total_all = 0
+                for mn in model_names:
+                    cm_d = results[mn].get("conf_matrix", [[0,0],[0,0]])
+                    total_pos += cm_d[1][0] + cm_d[1][1]
+                    total_all += cm_d[0][0] + cm_d[0][1] + cm_d[1][0] + cm_d[1][1]
+                baseline_prev = total_pos / max(total_all, 1)
 
-            fig_pr, ax_pr = plt.subplots(figsize=(8, 5.5), facecolor='none')
-            ax_pr.set_facecolor('none')
+                fig_pr, ax_pr = plt.subplots(figsize=(8, 5.5), facecolor='none')
+                ax_pr.set_facecolor('none')
 
-            for i, mn in enumerate(model_names):
-                prd = results[mn].get("pr_curve", {})
-                if prd:
-                    pr_prec = prd["precision"]
-                    pr_rec  = prd["recall"]
-                    ap      = prd.get("avg_precision", results[mn].get("auc", 0))
-                    ax_pr.plot(pr_rec, pr_prec,
-                               color=colors_bar[i], linewidth=2.2,
-                               label=f"{short_names[i]} — AP = {ap:.4f}")
+                for i, mn in enumerate(model_names):
+                    prd = results[mn].get("pr_curve", {})
+                    if prd:
+                        pr_prec = prd["precision"]
+                        pr_rec  = prd["recall"]
+                        ap      = prd.get("avg_precision", results[mn].get("auc", 0))
+                        ax_pr.plot(pr_rec, pr_prec,
+                                   color=colors_bar[i], linewidth=2.2,
+                                   label=f"{short_names[i]} — AP = {ap:.4f}")
 
-            # Baseline (random)
-            ax_pr.axhline(baseline_prev, color=ucharts.color('fg_subtle'), linestyle='--',
-                          linewidth=1.2, label=f'Baseline (prevalence = {baseline_prev:.2f})')
+                # Baseline (random)
+                ax_pr.axhline(baseline_prev, color=ucharts.color('fg_subtle'), linestyle='--',
+                              linewidth=1.2, label=f'Baseline (prevalence = {baseline_prev:.2f})')
 
-            ax_pr.set_xlabel("Recall (True Positive Rate)",
-                             color=ucharts.color('fg'), fontsize=10)
-            ax_pr.set_ylabel("Precision", color=ucharts.color('fg'), fontsize=10)
-            ax_pr.set_title("Precision-Recall Curve — All Models",
-                            color=ucharts.color('fg'), fontsize=12, fontweight='700', pad=12)
-            ax_pr.set_xlim(0, 1); ax_pr.set_ylim(0, 1.02)
-            ax_pr.tick_params(colors=ucharts.color('fg'), labelsize=9)
-            ax_pr.legend(facecolor=ucharts.color('surface'), labelcolor=ucharts.color('fg'),
-                         fontsize=9, loc='upper right',
-                         framealpha=0.8, edgecolor=ucharts.color('grid'))
-            for sp in ['top', 'right']:   ax_pr.spines[sp].set_visible(False)
-            for sp in ['left', 'bottom']: ax_pr.spines[sp].set_color(ucharts.color('spine'))
-            ax_pr.grid(True, color=ucharts.color('surface'), linestyle='--', linewidth=0.5, alpha=0.7)
-            plt.tight_layout()
-            st.pyplot(fig_pr, transparent=True)
-            plt.close()
+                ax_pr.set_xlabel("Recall (True Positive Rate)",
+                                 color=ucharts.color('fg'), fontsize=10)
+                ax_pr.set_ylabel("Precision", color=ucharts.color('fg'), fontsize=10)
+                ax_pr.set_title("Precision-Recall Curve — All Models",
+                                color=ucharts.color('fg'), fontsize=12, fontweight='700', pad=12)
+                ax_pr.set_xlim(0, 1); ax_pr.set_ylim(0, 1.02)
+                ax_pr.tick_params(colors=ucharts.color('fg'), labelsize=9)
+                ax_pr.legend(facecolor=ucharts.color('surface'), labelcolor=ucharts.color('fg'),
+                             fontsize=9, loc='upper right',
+                             framealpha=0.8, edgecolor=ucharts.color('grid'))
+                for sp in ['top', 'right']:   ax_pr.spines[sp].set_visible(False)
+                for sp in ['left', 'bottom']: ax_pr.spines[sp].set_color(ucharts.color('spine'))
+                ax_pr.grid(True, color=ucharts.color('surface'), linestyle='--', linewidth=0.5, alpha=0.7)
+                plt.tight_layout()
+                st.pyplot(fig_pr, transparent=True)
+                plt.close()
 
-            st.markdown("---")
+                st.markdown("---")
 
-            # ── 3. CONFUSION MATRIX (full heatmaps) ──────────────────────
-            st.markdown("### Confusion Matrix — Per Model")
-            st.markdown(
-                '<div class="alert-info">Rows = Actual labels, Columns = Predicted labels. '
+                # ── 3. CONFUSION MATRIX (full heatmaps) ──────────────────────
+                st.markdown("### Confusion Matrix — Per Model")
+                st.markdown(
+                    '<div class="alert-info">Rows = Actual labels, Columns = Predicted labels. '
                 '0 = Low Risk (No Disease) &nbsp;|&nbsp; 1 = High Risk (Disease). '
                 'Darker green = more correct predictions.</div>',
-                unsafe_allow_html=True)
+                    unsafe_allow_html=True)
 
-            # Two rows of confusion matrices
-            cm_cols = st.columns(len(model_names))
-            for idx, (mn, col_cm) in enumerate(zip(model_names, cm_cols)):
-                cm_d = results[mn].get("conf_matrix", [[0,0],[0,0]])
-                tn_v = cm_d[0][0]; fp_v = cm_d[0][1]
-                fn_v = cm_d[1][0]; tp_v = cm_d[1][1]
-                total_v = tn_v + fp_v + fn_v + tp_v
-                sens_v  = tp_v / max(tp_v + fn_v, 1)
-                spec_v  = tn_v / max(tn_v + fp_v, 1)
-                acc_v   = (tp_v + tn_v) / max(total_v, 1)
+                # Two rows of confusion matrices
+                cm_cols = st.columns(len(model_names))
+                for idx, (mn, col_cm) in enumerate(zip(model_names, cm_cols)):
+                    cm_d = results[mn].get("conf_matrix", [[0,0],[0,0]])
+                    tn_v = cm_d[0][0]; fp_v = cm_d[0][1]
+                    fn_v = cm_d[1][0]; tp_v = cm_d[1][1]
+                    total_v = tn_v + fp_v + fn_v + tp_v
+                    sens_v  = tp_v / max(tp_v + fn_v, 1)
+                    spec_v  = tn_v / max(tn_v + fp_v, 1)
+                    acc_v   = (tp_v + tn_v) / max(total_v, 1)
 
-                with col_cm:
-                    fig_cm2, ax_cm2 = plt.subplots(figsize=(3.2, 3.0), facecolor='none')
-                    ax_cm2.set_facecolor('none')
+                    with col_cm:
+                        fig_cm2, ax_cm2 = plt.subplots(figsize=(3.2, 3.0), facecolor='none')
+                        ax_cm2.set_facecolor('none')
 
-                    cm_arr2  = np.array([[tn_v, fp_v], [fn_v, tp_v]], dtype=float)
-                    cm_norm  = cm_arr2 / max(cm_arr2.max(), 1)
+                        cm_arr2  = np.array([[tn_v, fp_v], [fn_v, tp_v]], dtype=float)
+                        cm_norm  = cm_arr2 / max(cm_arr2.max(), 1)
 
-                    im = ax_cm2.imshow(cm_norm, cmap=ucharts.cmap('sequential', reverse=True),
-                                       aspect='auto', vmin=0, vmax=1)
-                    plt.colorbar(im, ax=ax_cm2, fraction=0.046, pad=0.04)
+                        im = ax_cm2.imshow(cm_norm, cmap=ucharts.cmap('sequential', reverse=True),
+                                           aspect='auto', vmin=0, vmax=1)
+                        plt.colorbar(im, ax=ax_cm2, fraction=0.046, pad=0.04)
 
-                    labels_mat = [[f"TN\n{tn_v}", f"FP\n{fp_v}"],
-                                  [f"FN\n{fn_v}", f"TP\n{tp_v}"]]
-                    clr_txt = [[ucharts.on_color(im.cmap(im.norm(cm_norm[r][c])))
-                                for c in range(2)] for r in range(2)]
-                    for r in range(2):
-                        for c_ in range(2):
-                            ax_cm2.text(c_, r, labels_mat[r][c_],
-                                        ha='center', va='center',
-                                        color=clr_txt[r][c_],
-                                        fontsize=9, fontweight='800')
+                        labels_mat = [[f"TN\n{tn_v}", f"FP\n{fp_v}"],
+                                      [f"FN\n{fn_v}", f"TP\n{tp_v}"]]
+                        clr_txt = [[ucharts.on_color(im.cmap(im.norm(cm_norm[r][c])))
+                                    for c in range(2)] for r in range(2)]
+                        for r in range(2):
+                            for c_ in range(2):
+                                ax_cm2.text(c_, r, labels_mat[r][c_],
+                                            ha='center', va='center',
+                                            color=clr_txt[r][c_],
+                                            fontsize=9, fontweight='800')
 
-                    ax_cm2.set_xticks([0, 1])
-                    ax_cm2.set_yticks([0, 1])
-                    ax_cm2.set_xticklabels(['Pred: 0\n(Low Risk)', 'Pred: 1\n(High Risk)'],
-                                           color=ucharts.color('fg'), fontsize=7)
-                    ax_cm2.set_yticklabels(['Act: 0\n(Low Risk)', 'Act: 1\n(High Risk)'],
-                                           color=ucharts.color('fg'), fontsize=7)
-                    ax_cm2.set_title(f"{short_names[idx]}\nAcc={acc_v:.1%}",
-                                     color=ucharts.color('fg'), fontsize=9, fontweight='700', pad=8)
-                    ax_cm2.tick_params(length=0)
-                    plt.tight_layout(pad=0.5)
-                    st.pyplot(fig_cm2, transparent=True)
-                    plt.close()
+                        ax_cm2.set_xticks([0, 1])
+                        ax_cm2.set_yticks([0, 1])
+                        ax_cm2.set_xticklabels(['Pred: 0\n(Low Risk)', 'Pred: 1\n(High Risk)'],
+                                               color=ucharts.color('fg'), fontsize=7)
+                        ax_cm2.set_yticklabels(['Act: 0\n(Low Risk)', 'Act: 1\n(High Risk)'],
+                                               color=ucharts.color('fg'), fontsize=7)
+                        ax_cm2.set_title(f"{short_names[idx]}\nAcc={acc_v:.1%}",
+                                         color=ucharts.color('fg'), fontsize=9, fontweight='700', pad=8)
+                        ax_cm2.tick_params(length=0)
+                        plt.tight_layout(pad=0.5)
+                        st.pyplot(fig_cm2, transparent=True)
+                        plt.close()
 
-                    st.markdown(
-                        f'<div style="font-size:.74em;color:#94a3b8;line-height:1.8;text-align:center;">'
+                        st.markdown(
+                            f'<div style="font-size:.74em;color:#94a3b8;line-height:1.8;text-align:center;">'
                         f'Sensitivity: <b style="color:#10b981">{sens_v:.1%}</b><br>'
                         f'Specificity: <b style="color:#3b82f6">{spec_v:.1%}</b>'
                         f'</div>', unsafe_allow_html=True)
 
-            # Summary table below all CMs
-            st.markdown("---")
-            st.markdown("#### Confusion Matrix Summary Table")
-            cm_rows = []
-            for mn in model_names:
-                cm_d = results[mn].get("conf_matrix", [[0,0],[0,0]])
-                tn_v, fp_v = cm_d[0][0], cm_d[0][1]
-                fn_v, tp_v = cm_d[1][0], cm_d[1][1]
-                total_v    = tn_v + fp_v + fn_v + tp_v
-                cm_rows.append({
-                    "Model":        mn,
-                    "TP":           tp_v, "TN": tn_v,
-                    "FP":           fp_v, "FN": fn_v,
-                    "Accuracy":     f"{(tp_v+tn_v)/max(total_v,1):.2%}",
-                    "Sensitivity":  f"{tp_v/max(tp_v+fn_v,1):.2%}",
-                    "Specificity":  f"{tn_v/max(tn_v+fp_v,1):.2%}",
-                    "FPR":          f"{fp_v/max(fp_v+tn_v,1):.2%}",
-                    "FNR":          f"{fn_v/max(fn_v+tp_v,1):.2%}",
-                })
-            st.dataframe(pd.DataFrame(cm_rows), hide_index=True, use_container_width=True)
+                # Summary table below all CMs
+                st.markdown("---")
+                st.markdown("#### Confusion Matrix Summary Table")
+                cm_rows = []
+                for mn in model_names:
+                    cm_d = results[mn].get("conf_matrix", [[0,0],[0,0]])
+                    tn_v, fp_v = cm_d[0][0], cm_d[0][1]
+                    fn_v, tp_v = cm_d[1][0], cm_d[1][1]
+                    total_v    = tn_v + fp_v + fn_v + tp_v
+                    cm_rows.append({
+                        "Model":        mn,
+                        "TP":           tp_v, "TN": tn_v,
+                        "FP":           fp_v, "FN": fn_v,
+                        "Accuracy":     f"{(tp_v+tn_v)/max(total_v,1):.2%}",
+                        "Sensitivity":  f"{tp_v/max(tp_v+fn_v,1):.2%}",
+                        "Specificity":  f"{tn_v/max(tn_v+fp_v,1):.2%}",
+                        "FPR":          f"{fp_v/max(fp_v+tn_v,1):.2%}",
+                        "FNR":          f"{fn_v/max(fn_v+tp_v,1):.2%}",
+                    })
+                st.dataframe(pd.DataFrame(cm_rows), hide_index=True, use_container_width=True)
 
     # ══════════════════════════════════════════════════════════════════
     # TAB 7 — K-Fold Cross Validation
     # ══════════════════════════════════════════════════════════════════
-    with t7:
-        section_header("K", "K-Fold Cross Validation",
-                       f"Stratified {results[model_names[0]].get('kfold_cv', {}).get('k', 5) if results[model_names[0]].get('kfold_cv') else 5}-Fold CV — measures model generalisation and stability")
+    if 'K-Fold CV' in _slot:
+        with _slot['K-Fold CV']:
+            section_header("K", "K-Fold Cross Validation",
+                           f"Stratified {results[model_names[0]].get('kfold_cv', {}).get('k', 5) if results[model_names[0]].get('kfold_cv') else 5}-Fold CV — measures model generalisation and stability")
 
-        has_cv = any(
-            results[m].get("kfold_cv") is not None
-            for m in model_names
-        )
+            has_cv = any(
+                results[m].get("kfold_cv") is not None
+                for m in model_names
+            )
 
-        if not has_cv:
-            st.markdown(
-                '<div class="alert-warning">K-Fold CV data not found. '
+            if not has_cv:
+                st.markdown(
+                    '<div class="alert-warning">K-Fold CV data not found. '
                 'Please ask SuperAdmin to <b>re-train models</b> so CV results are saved.</div>',
-                unsafe_allow_html=True)
-        else:
-            cv_colors  = [ucharts.color('risk_high'),ucharts.color('primary'),ucharts.color('risk_borderline'),ucharts.color('risk_low'),ucharts.color('series_random_forest')]
-            cv_metrics = ["accuracy","auc","f1","precision","recall"]
-            cv_labels  = ["Accuracy","AUC","F1 Score","Precision","Recall"]
+                    unsafe_allow_html=True)
+            else:
+                cv_colors  = [ucharts.color('risk_high'),ucharts.color('primary'),ucharts.color('risk_borderline'),ucharts.color('risk_low'),ucharts.color('series_random_forest')]
+                cv_metrics = ["accuracy","auc","f1","precision","recall"]
+                cv_labels  = ["Accuracy","AUC","F1 Score","Precision","Recall"]
 
-            # ── SUMMARY CARD: best CV model ───────────────────────────
-            best_cv_name, best_cv_auc = None, -1
-            for mn in model_names:
-                cv = results[mn].get("kfold_cv")
-                if cv and cv["mean"]["auc"] > best_cv_auc:
-                    best_cv_auc  = cv["mean"]["auc"]
-                    best_cv_name = mn
+                # ── SUMMARY CARD: best CV model ───────────────────────────
+                best_cv_name, best_cv_auc = None, -1
+                for mn in model_names:
+                    cv = results[mn].get("kfold_cv")
+                    if cv and cv["mean"]["auc"] > best_cv_auc:
+                        best_cv_auc  = cv["mean"]["auc"]
+                        best_cv_name = mn
 
-            best_cv = results[best_cv_name]["kfold_cv"]
-            st.markdown(f"""
+                best_cv = results[best_cv_name]["kfold_cv"]
+                st.markdown(f"""
             <div style="background:linear-gradient(135deg,#1e0d2e,#2d1f40);border:2px solid #a855f7;
                         border-radius:14px;padding:16px 22px;margin-bottom:20px;
                         display:flex;align-items:center;gap:16px;">
@@ -2814,206 +2884,207 @@ def page_model_performance(user):
               </div>
             </div>""", unsafe_allow_html=True)
 
-            # ── PLOT 1: Fold-by-fold line chart per metric ────────────
-            st.markdown("### Fold-by-Fold Performance — All Models")
-            st.markdown('<div class="alert-info">Each line = one model. X-axis = fold number. '
+                # ── PLOT 1: Fold-by-fold line chart per metric ────────────
+                st.markdown("### Fold-by-Fold Performance — All Models")
+                st.markdown('<div class="alert-info">Each line = one model. X-axis = fold number. '
                         'Stable horizontal lines indicate a robust model.</div>',
-                        unsafe_allow_html=True)
+                            unsafe_allow_html=True)
 
-            kfold_n = best_cv["k"]
-            fold_labels = [f"Fold {i+1}" for i in range(kfold_n)]
+                kfold_n = best_cv["k"]
+                fold_labels = [f"Fold {i+1}" for i in range(kfold_n)]
 
-            fig_folds, axes_folds = plt.subplots(
-                1, len(cv_metrics), figsize=(3.8 * len(cv_metrics), 4),
-                facecolor='none')
-            for ax_f, met, lbl in zip(axes_folds, cv_metrics, cv_labels):
-                ax_f.set_facecolor('none')
-                for i, mn in enumerate(model_names):
-                    cv = results[mn].get("kfold_cv")
-                    if cv:
-                        vals = cv["folds"][met]
-                        ax_f.plot(range(1, kfold_n+1), vals,
-                                  marker='o', markersize=5,
-                                  color=cv_colors[i], linewidth=1.8,
-                                  label=short_names[i])
-                        ax_f.axhline(cv["mean"][met], color=cv_colors[i],
-                                     linestyle='--', linewidth=0.7, alpha=0.5)
-                ax_f.set_title(lbl, color=ucharts.color('fg'), fontsize=9, fontweight='700')
-                ax_f.set_xticks(range(1, kfold_n+1))
-                ax_f.set_xticklabels([str(i) for i in range(1, kfold_n+1)],
-                                      color=ucharts.color('fg'), fontsize=7)
-                ax_f.set_ylim(0.4, 1.02)
-                ax_f.tick_params(colors=ucharts.color('fg'), labelsize=7)
-                for sp in ['top','right']:   ax_f.spines[sp].set_visible(False)
-                for sp in ['left','bottom']: ax_f.spines[sp].set_color(ucharts.color('spine'))
-                ax_f.grid(True, color=ucharts.color('surface'), linestyle='--',
-                          linewidth=0.5, alpha=0.6)
+                fig_folds, axes_folds = plt.subplots(
+                    1, len(cv_metrics), figsize=(3.8 * len(cv_metrics), 4),
+                    facecolor='none')
+                for ax_f, met, lbl in zip(axes_folds, cv_metrics, cv_labels):
+                    ax_f.set_facecolor('none')
+                    for i, mn in enumerate(model_names):
+                        cv = results[mn].get("kfold_cv")
+                        if cv:
+                            vals = cv["folds"][met]
+                            ax_f.plot(range(1, kfold_n+1), vals,
+                                      marker='o', markersize=5,
+                                      color=cv_colors[i], linewidth=1.8,
+                                      label=short_names[i])
+                            ax_f.axhline(cv["mean"][met], color=cv_colors[i],
+                                         linestyle='--', linewidth=0.7, alpha=0.5)
+                    ax_f.set_title(lbl, color=ucharts.color('fg'), fontsize=9, fontweight='700')
+                    ax_f.set_xticks(range(1, kfold_n+1))
+                    ax_f.set_xticklabels([str(i) for i in range(1, kfold_n+1)],
+                                          color=ucharts.color('fg'), fontsize=7)
+                    ax_f.set_ylim(0.4, 1.02)
+                    ax_f.tick_params(colors=ucharts.color('fg'), labelsize=7)
+                    for sp in ['top','right']:   ax_f.spines[sp].set_visible(False)
+                    for sp in ['left','bottom']: ax_f.spines[sp].set_color(ucharts.color('spine'))
+                    ax_f.grid(True, color=ucharts.color('surface'), linestyle='--',
+                              linewidth=0.5, alpha=0.6)
 
-            # shared legend below charts
-            handles = [plt.Line2D([0],[0], color=cv_colors[i], lw=2, label=short_names[i])
-                       for i in range(len(model_names))]
-            fig_folds.legend(handles=handles, loc='lower center',
-                             ncol=len(model_names), facecolor=ucharts.color('surface'),
-                             labelcolor=ucharts.color('fg'), fontsize=8,
-                             bbox_to_anchor=(0.5, -0.08), framealpha=0.8)
-            plt.tight_layout()
-            st.pyplot(fig_folds, transparent=True)
-            plt.close()
+                # shared legend below charts
+                handles = [plt.Line2D([0],[0], color=cv_colors[i], lw=2, label=short_names[i])
+                           for i in range(len(model_names))]
+                fig_folds.legend(handles=handles, loc='lower center',
+                                 ncol=len(model_names), facecolor=ucharts.color('surface'),
+                                 labelcolor=ucharts.color('fg'), fontsize=8,
+                                 bbox_to_anchor=(0.5, -0.08), framealpha=0.8)
+                plt.tight_layout()
+                st.pyplot(fig_folds, transparent=True)
+                plt.close()
 
-            st.markdown("---")
+                st.markdown("---")
 
-            # ── PLOT 2: Box plots — one per metric ────────────────────
-            st.markdown("### Score Distribution per Model (Box Plot)")
-            st.markdown('<div class="alert-info">Box width = interquartile range (IQR). '
+                # ── PLOT 2: Box plots — one per metric ────────────────────
+                st.markdown("### Score Distribution per Model (Box Plot)")
+                st.markdown('<div class="alert-info">Box width = interquartile range (IQR). '
                         'Whiskers = min/max per model. Narrow box = more stable model.</div>',
-                        unsafe_allow_html=True)
+                            unsafe_allow_html=True)
 
-            fig_box, axes_box = plt.subplots(
-                1, len(cv_metrics), figsize=(3.8 * len(cv_metrics), 4.5),
-                facecolor='none')
-            for ax_b, met, lbl in zip(axes_box, cv_metrics, cv_labels):
-                ax_b.set_facecolor('none')
-                box_data   = []
-                box_colors = []
-                box_labels = []
-                for i, mn in enumerate(model_names):
-                    cv = results[mn].get("kfold_cv")
-                    if cv:
-                        box_data.append(cv["folds"][met])
-                        box_colors.append(cv_colors[i])
-                        box_labels.append(short_names[i])
+                fig_box, axes_box = plt.subplots(
+                    1, len(cv_metrics), figsize=(3.8 * len(cv_metrics), 4.5),
+                    facecolor='none')
+                for ax_b, met, lbl in zip(axes_box, cv_metrics, cv_labels):
+                    ax_b.set_facecolor('none')
+                    box_data   = []
+                    box_colors = []
+                    box_labels = []
+                    for i, mn in enumerate(model_names):
+                        cv = results[mn].get("kfold_cv")
+                        if cv:
+                            box_data.append(cv["folds"][met])
+                            box_colors.append(cv_colors[i])
+                            box_labels.append(short_names[i])
 
-                bp = ax_b.boxplot(box_data, patch_artist=True,
-                                  widths=0.5, notch=False,
-                                  medianprops=dict(color=ucharts.color('surface'), linewidth=2))
-                for patch, col in zip(bp['boxes'], box_colors):
-                    patch.set_facecolor(col)
-                    patch.set_alpha(0.75)
-                for whisker in bp['whiskers']:
-                    whisker.set_color(ucharts.color('fg_subtle'))
-                for cap in bp['caps']:
-                    cap.set_color(ucharts.color('fg_subtle'))
-                for flier in bp['fliers']:
-                    flier.set(marker='o', color=ucharts.color('fg_muted'),
-                              markersize=4, alpha=0.6)
+                    bp = ax_b.boxplot(box_data, patch_artist=True,
+                                      widths=0.5, notch=False,
+                                      medianprops=dict(color=ucharts.color('surface'), linewidth=2))
+                    for patch, col in zip(bp['boxes'], box_colors):
+                        patch.set_facecolor(col)
+                        patch.set_alpha(0.75)
+                    for whisker in bp['whiskers']:
+                        whisker.set_color(ucharts.color('fg_subtle'))
+                    for cap in bp['caps']:
+                        cap.set_color(ucharts.color('fg_subtle'))
+                    for flier in bp['fliers']:
+                        flier.set(marker='o', color=ucharts.color('fg_muted'),
+                                  markersize=4, alpha=0.6)
 
-                ax_b.set_xticklabels(box_labels, color=ucharts.color('fg'), fontsize=8)
-                ax_b.set_title(lbl, color=ucharts.color('fg'), fontsize=9, fontweight='700')
-                ax_b.set_ylim(0.35, 1.05)
-                ax_b.tick_params(colors=ucharts.color('fg'), labelsize=7)
-                for sp in ['top','right']:   ax_b.spines[sp].set_visible(False)
-                for sp in ['left','bottom']: ax_b.spines[sp].set_color(ucharts.color('spine'))
-                ax_b.grid(True, axis='y', color=ucharts.color('surface'),
-                          linestyle='--', linewidth=0.5, alpha=0.6)
+                    ax_b.set_xticklabels(box_labels, color=ucharts.color('fg'), fontsize=8)
+                    ax_b.set_title(lbl, color=ucharts.color('fg'), fontsize=9, fontweight='700')
+                    ax_b.set_ylim(0.35, 1.05)
+                    ax_b.tick_params(colors=ucharts.color('fg'), labelsize=7)
+                    for sp in ['top','right']:   ax_b.spines[sp].set_visible(False)
+                    for sp in ['left','bottom']: ax_b.spines[sp].set_color(ucharts.color('spine'))
+                    ax_b.grid(True, axis='y', color=ucharts.color('surface'),
+                              linestyle='--', linewidth=0.5, alpha=0.6)
 
-            plt.tight_layout()
-            st.pyplot(fig_box, transparent=True)
-            plt.close()
+                plt.tight_layout()
+                st.pyplot(fig_box, transparent=True)
+                plt.close()
 
-            st.markdown("---")
+                st.markdown("---")
 
-            # ── PLOT 3: Stability Heatmap (Std per model/metric) ──────
-            st.markdown("### Stability Heatmap — Standard Deviation")
-            st.markdown('<div class="alert-info">Lower std = more stable (darker blue = better). '
+                # ── PLOT 3: Stability Heatmap (Std per model/metric) ──────
+                st.markdown("### Stability Heatmap — Standard Deviation")
+                st.markdown('<div class="alert-info">Lower std = more stable (darker blue = better). '
                         'High std means the model is sensitive to which data it trains on.</div>',
-                        unsafe_allow_html=True)
+                            unsafe_allow_html=True)
 
-            std_matrix = np.array([
-                [results[mn]["kfold_cv"]["std"][m]
-                 if results[mn].get("kfold_cv") else 0
-                 for m in cv_metrics]
-                for mn in model_names
-            ])
+                std_matrix = np.array([
+                    [results[mn]["kfold_cv"]["std"][m]
+                     if results[mn].get("kfold_cv") else 0
+                     for m in cv_metrics]
+                    for mn in model_names
+                ])
 
-            fig_hm, ax_hm = plt.subplots(figsize=(8, 3.5), facecolor='none')
-            ax_hm.set_facecolor('none')
-            im_h = ax_hm.imshow(std_matrix, cmap=ucharts.cmap('sequential', reverse=True),
-                                 aspect='auto', vmin=0, vmax=0.05)
-            plt.colorbar(im_h, ax=ax_hm, fraction=0.03, pad=0.02)
-            ax_hm.set_xticks(range(len(cv_labels)))
-            ax_hm.set_yticks(range(len(model_names)))
-            ax_hm.set_xticklabels(cv_labels, color=ucharts.color('fg'), fontsize=9)
-            ax_hm.set_yticklabels(short_names, color=ucharts.color('fg'), fontsize=9)
-            ax_hm.set_title("Std Deviation per Model & Metric (lower = more stable)",
-                            color=ucharts.color('fg'), fontsize=10, fontweight='700', pad=10)
-            for r in range(len(model_names)):
-                for c_ in range(len(cv_metrics)):
-                    ax_hm.text(c_, r, f"{std_matrix[r,c_]:.4f}",
-                               ha='center', va='center',
-                               color=ucharts.on_color(im_h.cmap(im_h.norm(std_matrix[r, c_]))),
-                               fontsize=8, fontweight='700')
-            ax_hm.tick_params(length=0)
-            plt.tight_layout()
-            st.pyplot(fig_hm, transparent=True)
-            plt.close()
+                fig_hm, ax_hm = plt.subplots(figsize=(8, 3.5), facecolor='none')
+                ax_hm.set_facecolor('none')
+                im_h = ax_hm.imshow(std_matrix, cmap=ucharts.cmap('sequential', reverse=True),
+                                     aspect='auto', vmin=0, vmax=0.05)
+                plt.colorbar(im_h, ax=ax_hm, fraction=0.03, pad=0.02)
+                ax_hm.set_xticks(range(len(cv_labels)))
+                ax_hm.set_yticks(range(len(model_names)))
+                ax_hm.set_xticklabels(cv_labels, color=ucharts.color('fg'), fontsize=9)
+                ax_hm.set_yticklabels(short_names, color=ucharts.color('fg'), fontsize=9)
+                ax_hm.set_title("Std Deviation per Model & Metric (lower = more stable)",
+                                color=ucharts.color('fg'), fontsize=10, fontweight='700', pad=10)
+                for r in range(len(model_names)):
+                    for c_ in range(len(cv_metrics)):
+                        ax_hm.text(c_, r, f"{std_matrix[r,c_]:.4f}",
+                                   ha='center', va='center',
+                                   color=ucharts.on_color(im_h.cmap(im_h.norm(std_matrix[r, c_]))),
+                                   fontsize=8, fontweight='700')
+                ax_hm.tick_params(length=0)
+                plt.tight_layout()
+                st.pyplot(fig_hm, transparent=True)
+                plt.close()
 
-            st.markdown("---")
+                st.markdown("---")
 
-            # ── TABLE: Mean ± Std summary ─────────────────────────────
-            st.markdown("### Mean \u00b1 Std Summary Table")
-            cv_summary_rows = []
-            for mn in model_names:
-                cv = results[mn].get("kfold_cv")
-                if cv:
-                    row = {"Model": mn}
-                    for met, lbl in zip(cv_metrics, cv_labels):
-                        mu  = cv["mean"][met]
-                        sig = cv["std"][met]
-                        row[lbl] = f"{mu:.4f} \u00b1 {sig:.4f}"
-                    cv_summary_rows.append(row)
-            if cv_summary_rows:
-                cv_df = pd.DataFrame(cv_summary_rows)
-                st.dataframe(cv_df, hide_index=True, use_container_width=True)
-
-            # ── TABLE: Per-fold detail ────────────────────────────────
-            with st.expander("Show per-fold detail for each model"):
+                # ── TABLE: Mean ± Std summary ─────────────────────────────
+                st.markdown("### Mean \u00b1 Std Summary Table")
+                cv_summary_rows = []
                 for mn in model_names:
                     cv = results[mn].get("kfold_cv")
-                    if not cv:
-                        continue
-                    st.markdown(f"**{mn}**")
-                    fold_rows = []
-                    for fid in range(cv["k"]):
+                    if cv:
+                        row = {"Model": mn}
+                        for met, lbl in zip(cv_metrics, cv_labels):
+                            mu  = cv["mean"][met]
+                            sig = cv["std"][met]
+                            row[lbl] = f"{mu:.4f} \u00b1 {sig:.4f}"
+                        cv_summary_rows.append(row)
+                if cv_summary_rows:
+                    cv_df = pd.DataFrame(cv_summary_rows)
+                    st.dataframe(cv_df, hide_index=True, use_container_width=True)
+
+                # ── TABLE: Per-fold detail ────────────────────────────────
+                with st.expander("Show per-fold detail for each model"):
+                    for mn in model_names:
+                        cv = results[mn].get("kfold_cv")
+                        if not cv:
+                            continue
+                        st.markdown(f"**{mn}**")
+                        fold_rows = []
+                        for fid in range(cv["k"]):
+                            fold_rows.append({
+                                # FIXED (BUG-21): str, not int. Mixing ints with the "Mean"
+                                # and "Std" labels below gave an object-dtype column that
+                                # pyarrow could not serialise, throwing on every render.
+                                "Fold":      str(fid + 1),
+                                "Accuracy":  f"{cv['folds']['accuracy'][fid]:.4f}",
+                                "AUC":       f"{cv['folds']['auc'][fid]:.4f}",
+                                "F1":        f"{cv['folds']['f1'][fid]:.4f}",
+                                "Precision": f"{cv['folds']['precision'][fid]:.4f}",
+                                "Recall":    f"{cv['folds']['recall'][fid]:.4f}",
+                            })
+                        # Add mean/std row
                         fold_rows.append({
-                            # FIXED (BUG-21): str, not int. Mixing ints with the "Mean"
-                            # and "Std" labels below gave an object-dtype column that
-                            # pyarrow could not serialise, throwing on every render.
-                            "Fold":      str(fid + 1),
-                            "Accuracy":  f"{cv['folds']['accuracy'][fid]:.4f}",
-                            "AUC":       f"{cv['folds']['auc'][fid]:.4f}",
-                            "F1":        f"{cv['folds']['f1'][fid]:.4f}",
-                            "Precision": f"{cv['folds']['precision'][fid]:.4f}",
-                            "Recall":    f"{cv['folds']['recall'][fid]:.4f}",
+                            "Fold":      "Mean",
+                            "Accuracy":  f"{cv['mean']['accuracy']:.4f}",
+                            "AUC":       f"{cv['mean']['auc']:.4f}",
+                            "F1":        f"{cv['mean']['f1']:.4f}",
+                            "Precision": f"{cv['mean']['precision']:.4f}",
+                            "Recall":    f"{cv['mean']['recall']:.4f}",
                         })
-                    # Add mean/std row
-                    fold_rows.append({
-                        "Fold":      "Mean",
-                        "Accuracy":  f"{cv['mean']['accuracy']:.4f}",
-                        "AUC":       f"{cv['mean']['auc']:.4f}",
-                        "F1":        f"{cv['mean']['f1']:.4f}",
-                        "Precision": f"{cv['mean']['precision']:.4f}",
-                        "Recall":    f"{cv['mean']['recall']:.4f}",
-                    })
-                    fold_rows.append({
-                        "Fold":      "Std",
-                        "Accuracy":  f"{cv['std']['accuracy']:.4f}",
-                        "AUC":       f"{cv['std']['auc']:.4f}",
-                        "F1":        f"{cv['std']['f1']:.4f}",
-                        "Precision": f"{cv['std']['precision']:.4f}",
-                        "Recall":    f"{cv['std']['recall']:.4f}",
-                    })
-                    st.dataframe(pd.DataFrame(fold_rows),
-                                 hide_index=True, use_container_width=True)
-                    st.markdown("")
+                        fold_rows.append({
+                            "Fold":      "Std",
+                            "Accuracy":  f"{cv['std']['accuracy']:.4f}",
+                            "AUC":       f"{cv['std']['auc']:.4f}",
+                            "F1":        f"{cv['std']['f1']:.4f}",
+                            "Precision": f"{cv['std']['precision']:.4f}",
+                            "Recall":    f"{cv['std']['recall']:.4f}",
+                        })
+                        st.dataframe(pd.DataFrame(fold_rows),
+                                     hide_index=True, use_container_width=True)
+                        st.markdown("")
 
     # ══════════════════════════════════════════════════════════════════
     # TAB 8 — Explainable AI (SHAP)
     # ══════════════════════════════════════════════════════════════════
-    with t8:
-        section_header("S", "Explainable AI — SHAP Analysis",
-                       "SHapley Additive exPlanations: understand why each model makes its predictions")
+    if 'Explainable AI (SHAP)' in _slot:
+        with _slot['Explainable AI (SHAP)']:
+            section_header("S", "Explainable AI — SHAP Analysis",
+                           "SHapley Additive exPlanations: understand why each model makes its predictions")
 
-        st.markdown("""
+            st.markdown("""
         <div class="panel" style="border-left:4px solid #a855f7;">
         <h4 style="color:#a855f7;margin-bottom:8px;">What is SHAP?</h4>
         <p style="color:#4b5563;font-size:.9em;line-height:1.7;">
@@ -3036,394 +3107,395 @@ def page_model_performance(user):
         </div>
         """, unsafe_allow_html=True)
 
-        try:
-            import shap
-            shap_available = True
-        except ImportError:
-            shap_available = False
-            st.error("SHAP library not installed. Run: `pip install shap` and restart the app.")
+            try:
+                import shap
+                shap_available = True
+            except ImportError:
+                shap_available = False
+                st.error("SHAP library not installed. Run: `pip install shap` and restart the app.")
 
-        if shap_available:
-            # Feature name setup (reuse from tab t5)
-            shap_feat_path = os.path.join(MODELS_DIR, "features.json")
-            shap_feat_labels = {
-                "age": "Age", "gender": "Gender", "height": "Height", "weight": "Weight",
-                "ap_hi": "Systolic BP", "ap_lo": "Diastolic BP",
-                "cholesterol": "Cholesterol", "gluc": "Glucose",
-                "smoke": "Smoker", "alco": "Alcohol", "active": "Physically Active",
-                "bmi": "BMI", "pulse_pressure": "Pulse Pressure",
-                "age_group": "Age Group", "high_risk_flag": "High Risk Flag"
-            }
-            shap_fi_model_files = {
-                "Random Forest":               "random_forest.pkl",
-                "XGBoost":                     "xgboost.pkl",
-                "Decision Tree":               "decision_tree.pkl",
-                "Logistic Regression":         "logistic_regression.pkl",
-                "Support Vector Machine (SVM)": "svm.pkl",
-            }
+            if shap_available:
+                # Feature name setup (reuse from tab t5)
+                shap_feat_path = os.path.join(MODELS_DIR, "features.json")
+                shap_feat_labels = {
+                    "age": "Age", "gender": "Gender", "height": "Height", "weight": "Weight",
+                    "ap_hi": "Systolic BP", "ap_lo": "Diastolic BP",
+                    "cholesterol": "Cholesterol", "gluc": "Glucose",
+                    "smoke": "Smoker", "alco": "Alcohol", "active": "Physically Active",
+                    "bmi": "BMI", "pulse_pressure": "Pulse Pressure",
+                    "age_group": "Age Group", "high_risk_flag": "High Risk Flag"
+                }
+                shap_fi_model_files = {
+                    "Random Forest":               "random_forest.pkl",
+                    "XGBoost":                     "xgboost.pkl",
+                    "Decision Tree":               "decision_tree.pkl",
+                    "Logistic Regression":         "logistic_regression.pkl",
+                    "Support Vector Machine (SVM)": "svm.pkl",
+                }
 
-            shap_model_opts = [m for m in model_names if m in shap_fi_model_files]
-            shap_sel = st.selectbox(
-                "Select Model for SHAP Analysis",
-                shap_model_opts,
-                key="shap_tab_model_sel",
-                help="Tree models (RF, XGB, DT) compute SHAP fastest. SVM uses KernelExplainer (slower)."
-            )
-
-            @st.cache_data(show_spinner=False)
-            def compute_shap_values(model_name_key, feat_path_key, data_path_key, _model_file_key):
-                """Compute SHAP values — cached so it only reruns when inputs change."""
-                import shap as _shap
-                import pickle as _pickle, json as _json
-                import numpy as _np, pandas as _pd
-
-                if os.path.exists(feat_path_key):
-                    with open(feat_path_key) as _fj:
-                        _feat_names = _json.load(_fj)
-                else:
-                    _feat_names = ["age","gender","height","weight","ap_hi","ap_lo",
-                                   "cholesterol","gluc","smoke","alco","active",
-                                   "bmi","pulse_pressure","age_group","high_risk_flag"]
-
-                with open(_model_file_key, "rb") as _fm:
-                    _mdl = _pickle.load(_fm)
-
-                try:
-                    _df_bg = _pd.read_csv(data_path_key, sep=None, engine="python")
-                    for _tc in ["cardio", "target", "id", "Unnamed: 0"]:
-                        if _tc in _df_bg.columns:
-                            _df_bg.drop(columns=[_tc], inplace=True)
-                    _df_bg, _ = fe.convert_age_to_years(_df_bg)
-
-                    # FIXED (M2): apply the same physiological domain filter the models
-                    # were trained under. The background was previously drawn from raw
-                    # heart.csv, so SHAP explained a distribution containing rows the
-                    # models had never seen.
-                    _bg_mask = _pd.Series(True, index=_df_bg.index)
-                    if "ap_hi" in _df_bg.columns:
-                        _bg_mask &= _df_bg["ap_hi"].between(60, 250)
-                    if "ap_lo" in _df_bg.columns:
-                        _bg_mask &= _df_bg["ap_lo"].between(40, 200)
-                    if {"ap_hi", "ap_lo"} <= set(_df_bg.columns):
-                        _bg_mask &= _df_bg["ap_hi"] > _df_bg["ap_lo"]
-                    if "height" in _df_bg.columns:
-                        _bg_mask &= _df_bg["height"].between(100, 250)
-                    if "weight" in _df_bg.columns:
-                        _bg_mask &= _df_bg["weight"].between(20, 300)
-                    for _oc in ["cholesterol", "gluc"]:
-                        if _oc in _df_bg.columns:
-                            _bg_mask &= _df_bg[_oc].isin(fe.ORDINAL_VALID_VALUES)
-                    _df_bg = _df_bg[_bg_mask].reset_index(drop=True)
-
-                    # FIXED (BUG-05): derived features from the shared module — this was
-                    # the third divergent copy of the feature-engineering logic.
-                    _df_bg = fe.engineer_features(_df_bg)
-                    _avail = [c for c in _feat_names if c in _df_bg.columns]
-                    _df_bg = _df_bg[_avail].dropna()
-                    _scaler_path = os.path.join(os.path.dirname(_model_file_key), "scaler.pkl")
-                    with open(_scaler_path, "rb") as _sf:
-                        _sc = _pickle.load(_sf)
-                    _bg_sample = _df_bg.sample(min(300, len(_df_bg)), random_state=42)
-                    _bg_scaled = _sc.transform(_bg_sample)
-                    _bg_df = _pd.DataFrame(_bg_scaled, columns=_avail)
-                except Exception as _de:
-                    return None, None, str(_de)
-
-                try:
-                    if hasattr(_mdl, "feature_importances_"):
-                        _explainer = _shap.TreeExplainer(_mdl)
-                        _sv = _explainer.shap_values(_bg_df)
-                        if isinstance(_sv, list) and len(_sv) == 2:
-                            _sv = _sv[1]
-                    elif hasattr(_mdl, "coef_"):
-                        _explainer = _shap.LinearExplainer(_mdl, _bg_df)
-                        _sv = _explainer.shap_values(_bg_df)
-                        if isinstance(_sv, list):
-                            _sv = _sv[0]
-                    elif hasattr(_mdl, "calibrated_classifiers_"):
-                        _bg_small = _shap.sample(_bg_df, 80)
-                        _explainer = _shap.KernelExplainer(_mdl.predict_proba, _bg_small)
-                        _sv_s = _explainer.shap_values(_bg_small, nsamples=60)
-                        _sv  = _sv_s[1] if isinstance(_sv_s, list) and len(_sv_s)==2 else _sv_s
-                        _bg_df = _bg_small.reset_index(drop=True)
-                    else:
-                        _bg_small = _shap.sample(_bg_df, 80)
-                        _explainer = _shap.KernelExplainer(_mdl.predict_proba, _bg_small)
-                        _sv_s = _explainer.shap_values(_bg_small, nsamples=60)
-                        _sv  = _sv_s[1] if isinstance(_sv_s, list) else _sv_s
-                        _bg_df = _bg_small.reset_index(drop=True)
-                    return _np.array(_sv), _bg_df, None
-                except Exception as _ee:
-                    return None, None, str(_ee)
-
-            shap_model_file = os.path.join(MODELS_DIR, shap_fi_model_files[shap_sel])
-            with st.spinner(f"Computing SHAP values for {shap_sel}... (may take ~10–30 sec)"):
-                shap_vals, bg_data, shap_err = compute_shap_values(
-                    shap_sel, shap_feat_path, DATA_PATH, shap_model_file
+                shap_model_opts = [m for m in model_names if m in shap_fi_model_files]
+                shap_sel = st.selectbox(
+                    "Select Model for SHAP Analysis",
+                    shap_model_opts,
+                    key="shap_tab_model_sel",
+                    help="Tree models (RF, XGB, DT) compute SHAP fastest. SVM uses KernelExplainer (slower)."
                 )
 
-            if shap_err:
-                st.error(f"SHAP computation error: {shap_err}")
-            elif shap_vals is not None and bg_data is not None:
-                shap_feat_names = list(bg_data.columns)
-                shap_display    = [shap_feat_labels.get(f, f) for f in shap_feat_names]
-                mean_abs_shap   = np.abs(shap_vals).mean(axis=0)
-                sorted_idx      = np.argsort(mean_abs_shap)[::-1]
-                s_labels        = [shap_display[i] for i in sorted_idx]
-                s_vals          = mean_abs_shap[sorted_idx]
+                @st.cache_data(show_spinner=False)
+                def compute_shap_values(model_name_key, feat_path_key, data_path_key, _model_file_key):
+                    """Compute SHAP values — cached so it only reruns when inputs change."""
+                    import shap as _shap
+                    import pickle as _pickle, json as _json
+                    import numpy as _np, pandas as _pd
 
-                # ── Row 1: Mean |SHAP| bar  +  Beeswarm ──────────────────
-                col_shap1, col_shap2 = st.columns(2)
+                    if os.path.exists(feat_path_key):
+                        with open(feat_path_key) as _fj:
+                            _feat_names = _json.load(_fj)
+                    else:
+                        _feat_names = ["age","gender","height","weight","ap_hi","ap_lo",
+                                       "cholesterol","gluc","smoke","alco","active",
+                                       "bmi","pulse_pressure","age_group","high_risk_flag"]
 
-                with col_shap1:
-                    st.markdown("**Mean |SHAP| — Global Feature Impact Ranking**")
-                    # FIXED (BUG-02): matplotlib-safe hex, not CSS rgba() strings.
-                    bar_clrs_shap = [
-                        gradient_hex(j, len(sorted_idx), end=(60, 158, 238))
-                        for j in range(len(sorted_idx))
-                    ]
-                    fig_sb, ax_sb = plt.subplots(
-                        figsize=(6, max(4.5, len(shap_feat_names)*0.44)),
-                        facecolor='none')
-                    ax_sb.set_facecolor('none')
-                    hbars = ax_sb.barh(s_labels[::-1], s_vals[::-1],
-                                       color=bar_clrs_shap[::-1], height=0.65)
-                    ax_sb.set_xlabel("Mean |SHAP value|", color=ucharts.color('fg'), fontsize=9)
-                    ax_sb.set_title(f"Global SHAP Impact — {shap_sel}",
-                                    color=ucharts.color('fg'), fontsize=10, fontweight='700', pad=10)
-                    ax_sb.tick_params(colors=ucharts.color('fg'), labelsize=8)
-                    for sp in ['top','right']:   ax_sb.spines[sp].set_visible(False)
-                    for sp in ['left','bottom']: ax_sb.spines[sp].set_color(ucharts.color('spine'))
-                    ax_sb.grid(True, axis='x', color=ucharts.color('surface'), linestyle='--',
-                               linewidth=0.5, alpha=0.6)
-                    for hbar in hbars:
-                        ax_sb.text(hbar.get_width() + max(s_vals)*0.01,
-                                   hbar.get_y() + hbar.get_height()/2,
-                                   f"{hbar.get_width():.4f}",
-                                   va='center', color=ucharts.color('fg'), fontsize=7.5, fontweight='600')
-                    plt.tight_layout()
-                    st.pyplot(fig_sb, transparent=True)
-                    plt.close()
+                    with open(_model_file_key, "rb") as _fm:
+                        _mdl = _pickle.load(_fm)
 
-                with col_shap2:
-                    st.markdown("**Beeswarm Plot — SHAP Distribution per Feature**")
-                    st.markdown(
-                        '<div style="font-size:.78em;color:#94a3b8;margin-bottom:6px;">'
+                    try:
+                        _df_bg = _pd.read_csv(data_path_key, sep=None, engine="python")
+                        for _tc in ["cardio", "target", "id", "Unnamed: 0"]:
+                            if _tc in _df_bg.columns:
+                                _df_bg.drop(columns=[_tc], inplace=True)
+                        _df_bg, _ = fe.convert_age_to_years(_df_bg)
+
+                        # FIXED (M2): apply the same physiological domain filter the models
+                        # were trained under. The background was previously drawn from raw
+                        # heart.csv, so SHAP explained a distribution containing rows the
+                        # models had never seen.
+                        _bg_mask = _pd.Series(True, index=_df_bg.index)
+                        if "ap_hi" in _df_bg.columns:
+                            _bg_mask &= _df_bg["ap_hi"].between(60, 250)
+                        if "ap_lo" in _df_bg.columns:
+                            _bg_mask &= _df_bg["ap_lo"].between(40, 200)
+                        if {"ap_hi", "ap_lo"} <= set(_df_bg.columns):
+                            _bg_mask &= _df_bg["ap_hi"] > _df_bg["ap_lo"]
+                        if "height" in _df_bg.columns:
+                            _bg_mask &= _df_bg["height"].between(100, 250)
+                        if "weight" in _df_bg.columns:
+                            _bg_mask &= _df_bg["weight"].between(20, 300)
+                        for _oc in ["cholesterol", "gluc"]:
+                            if _oc in _df_bg.columns:
+                                _bg_mask &= _df_bg[_oc].isin(fe.ORDINAL_VALID_VALUES)
+                        _df_bg = _df_bg[_bg_mask].reset_index(drop=True)
+
+                        # FIXED (BUG-05): derived features from the shared module — this was
+                        # the third divergent copy of the feature-engineering logic.
+                        _df_bg = fe.engineer_features(_df_bg)
+                        _avail = [c for c in _feat_names if c in _df_bg.columns]
+                        _df_bg = _df_bg[_avail].dropna()
+                        _scaler_path = os.path.join(os.path.dirname(_model_file_key), "scaler.pkl")
+                        with open(_scaler_path, "rb") as _sf:
+                            _sc = _pickle.load(_sf)
+                        _bg_sample = _df_bg.sample(min(300, len(_df_bg)), random_state=42)
+                        _bg_scaled = _sc.transform(_bg_sample)
+                        _bg_df = _pd.DataFrame(_bg_scaled, columns=_avail)
+                    except Exception as _de:
+                        return None, None, str(_de)
+
+                    try:
+                        if hasattr(_mdl, "feature_importances_"):
+                            _explainer = _shap.TreeExplainer(_mdl)
+                            _sv = _explainer.shap_values(_bg_df)
+                            if isinstance(_sv, list) and len(_sv) == 2:
+                                _sv = _sv[1]
+                        elif hasattr(_mdl, "coef_"):
+                            _explainer = _shap.LinearExplainer(_mdl, _bg_df)
+                            _sv = _explainer.shap_values(_bg_df)
+                            if isinstance(_sv, list):
+                                _sv = _sv[0]
+                        elif hasattr(_mdl, "calibrated_classifiers_"):
+                            _bg_small = _shap.sample(_bg_df, 80)
+                            _explainer = _shap.KernelExplainer(_mdl.predict_proba, _bg_small)
+                            _sv_s = _explainer.shap_values(_bg_small, nsamples=60)
+                            _sv  = _sv_s[1] if isinstance(_sv_s, list) and len(_sv_s)==2 else _sv_s
+                            _bg_df = _bg_small.reset_index(drop=True)
+                        else:
+                            _bg_small = _shap.sample(_bg_df, 80)
+                            _explainer = _shap.KernelExplainer(_mdl.predict_proba, _bg_small)
+                            _sv_s = _explainer.shap_values(_bg_small, nsamples=60)
+                            _sv  = _sv_s[1] if isinstance(_sv_s, list) else _sv_s
+                            _bg_df = _bg_small.reset_index(drop=True)
+                        return _np.array(_sv), _bg_df, None
+                    except Exception as _ee:
+                        return None, None, str(_ee)
+
+                shap_model_file = os.path.join(MODELS_DIR, shap_fi_model_files[shap_sel])
+                with st.spinner(f"Computing SHAP values for {shap_sel}... (may take ~10–30 sec)"):
+                    shap_vals, bg_data, shap_err = compute_shap_values(
+                        shap_sel, shap_feat_path, DATA_PATH, shap_model_file
+                    )
+
+                if shap_err:
+                    st.error(f"SHAP computation error: {shap_err}")
+                elif shap_vals is not None and bg_data is not None:
+                    shap_feat_names = list(bg_data.columns)
+                    shap_display    = [shap_feat_labels.get(f, f) for f in shap_feat_names]
+                    mean_abs_shap   = np.abs(shap_vals).mean(axis=0)
+                    sorted_idx      = np.argsort(mean_abs_shap)[::-1]
+                    s_labels        = [shap_display[i] for i in sorted_idx]
+                    s_vals          = mean_abs_shap[sorted_idx]
+
+                    # ── Row 1: Mean |SHAP| bar  +  Beeswarm ──────────────────
+                    col_shap1, col_shap2 = st.columns(2)
+
+                    with col_shap1:
+                        st.markdown("**Mean |SHAP| — Global Feature Impact Ranking**")
+                        # FIXED (BUG-02): matplotlib-safe hex, not CSS rgba() strings.
+                        bar_clrs_shap = [
+                            gradient_hex(j, len(sorted_idx), end=(60, 158, 238))
+                            for j in range(len(sorted_idx))
+                        ]
+                        fig_sb, ax_sb = plt.subplots(
+                            figsize=(6, max(4.5, len(shap_feat_names)*0.44)),
+                            facecolor='none')
+                        ax_sb.set_facecolor('none')
+                        hbars = ax_sb.barh(s_labels[::-1], s_vals[::-1],
+                                           color=bar_clrs_shap[::-1], height=0.65)
+                        ax_sb.set_xlabel("Mean |SHAP value|", color=ucharts.color('fg'), fontsize=9)
+                        ax_sb.set_title(f"Global SHAP Impact — {shap_sel}",
+                                        color=ucharts.color('fg'), fontsize=10, fontweight='700', pad=10)
+                        ax_sb.tick_params(colors=ucharts.color('fg'), labelsize=8)
+                        for sp in ['top','right']:   ax_sb.spines[sp].set_visible(False)
+                        for sp in ['left','bottom']: ax_sb.spines[sp].set_color(ucharts.color('spine'))
+                        ax_sb.grid(True, axis='x', color=ucharts.color('surface'), linestyle='--',
+                                   linewidth=0.5, alpha=0.6)
+                        for hbar in hbars:
+                            ax_sb.text(hbar.get_width() + max(s_vals)*0.01,
+                                       hbar.get_y() + hbar.get_height()/2,
+                                       f"{hbar.get_width():.4f}",
+                                       va='center', color=ucharts.color('fg'), fontsize=7.5, fontweight='600')
+                        plt.tight_layout()
+                        st.pyplot(fig_sb, transparent=True)
+                        plt.close()
+
+                    with col_shap2:
+                        st.markdown("**Beeswarm Plot — SHAP Distribution per Feature**")
+                        st.markdown(
+                            '<div style="font-size:.78em;color:#94a3b8;margin-bottom:6px;">'
                         'Each dot = 1 patient. Red = high feature value, Blue = low. '
                         'Right of 0 = increases risk.</div>',
-                        unsafe_allow_html=True)
-                    fig_bsw, ax_bsw = plt.subplots(
-                        figsize=(6, max(4.5, len(shap_feat_names)*0.44)),
-                        facecolor='none')
-                    ax_bsw.set_facecolor('none')
-                    bg_arr = bg_data.values
-                    np.random.seed(42)
-                    for fi_rank, real_idx in enumerate(sorted_idx):
-                        feat_col_vals = bg_arr[:, real_idx]
-                        shap_col_vals = shap_vals[:, real_idx]
-                        ptp = feat_col_vals.max() - feat_col_vals.min()
-                        feat_norm = (feat_col_vals - feat_col_vals.min()) / (ptp + 1e-9)
-                        y_pos  = len(sorted_idx) - 1 - fi_rank
-                        jitter = np.random.uniform(-0.35, 0.35, len(shap_col_vals))
-                        ax_bsw.scatter(shap_col_vals, y_pos + jitter,
-                                       c=feat_norm, cmap=ucharts.cmap('diverging'),
-                                       alpha=0.50, s=9, linewidths=0)
-                    ax_bsw.axvline(0, color=ucharts.color('fg_muted'), linestyle='--', linewidth=1.0)
-                    ax_bsw.set_yticks(range(len(shap_feat_names)))
-                    ax_bsw.set_yticklabels(s_labels, color=ucharts.color('fg'), fontsize=7.5)
-                    ax_bsw.set_xlabel("SHAP value", color=ucharts.color('fg'), fontsize=9)
-                    ax_bsw.set_title("Beeswarm — All Patients",
-                                     color=ucharts.color('fg'), fontsize=10, fontweight='700', pad=10)
-                    ax_bsw.tick_params(colors=ucharts.color('fg'), labelsize=8)
-                    for sp in ['top','right']:   ax_bsw.spines[sp].set_visible(False)
-                    for sp in ['left','bottom']: ax_bsw.spines[sp].set_color(ucharts.color('spine'))
-                    # Colorbar legend
-                    sm = plt.cm.ScalarMappable(cmap=ucharts.cmap('diverging'),
-                                               norm=plt.Normalize(vmin=0, vmax=1))
-                    sm.set_array([])
-                    cb2 = plt.colorbar(sm, ax=ax_bsw, fraction=0.03, pad=0.02)
-                    cb2.set_label('Feature Value (normalised)', color=ucharts.color('fg'), fontsize=7)
-                    cb2.ax.tick_params(colors=ucharts.color('fg'), labelsize=6)
-                    plt.tight_layout()
-                    st.pyplot(fig_bsw, transparent=True)
-                    plt.close()
+                            unsafe_allow_html=True)
+                        fig_bsw, ax_bsw = plt.subplots(
+                            figsize=(6, max(4.5, len(shap_feat_names)*0.44)),
+                            facecolor='none')
+                        ax_bsw.set_facecolor('none')
+                        bg_arr = bg_data.values
+                        np.random.seed(42)
+                        for fi_rank, real_idx in enumerate(sorted_idx):
+                            feat_col_vals = bg_arr[:, real_idx]
+                            shap_col_vals = shap_vals[:, real_idx]
+                            ptp = feat_col_vals.max() - feat_col_vals.min()
+                            feat_norm = (feat_col_vals - feat_col_vals.min()) / (ptp + 1e-9)
+                            y_pos  = len(sorted_idx) - 1 - fi_rank
+                            jitter = np.random.uniform(-0.35, 0.35, len(shap_col_vals))
+                            ax_bsw.scatter(shap_col_vals, y_pos + jitter,
+                                           c=feat_norm, cmap=ucharts.cmap('diverging'),
+                                           alpha=0.50, s=9, linewidths=0)
+                        ax_bsw.axvline(0, color=ucharts.color('fg_muted'), linestyle='--', linewidth=1.0)
+                        ax_bsw.set_yticks(range(len(shap_feat_names)))
+                        ax_bsw.set_yticklabels(s_labels, color=ucharts.color('fg'), fontsize=7.5)
+                        ax_bsw.set_xlabel("SHAP value", color=ucharts.color('fg'), fontsize=9)
+                        ax_bsw.set_title("Beeswarm — All Patients",
+                                         color=ucharts.color('fg'), fontsize=10, fontweight='700', pad=10)
+                        ax_bsw.tick_params(colors=ucharts.color('fg'), labelsize=8)
+                        for sp in ['top','right']:   ax_bsw.spines[sp].set_visible(False)
+                        for sp in ['left','bottom']: ax_bsw.spines[sp].set_color(ucharts.color('spine'))
+                        # Colorbar legend
+                        sm = plt.cm.ScalarMappable(cmap=ucharts.cmap('diverging'),
+                                                   norm=plt.Normalize(vmin=0, vmax=1))
+                        sm.set_array([])
+                        cb2 = plt.colorbar(sm, ax=ax_bsw, fraction=0.03, pad=0.02)
+                        cb2.set_label('Feature Value (normalised)', color=ucharts.color('fg'), fontsize=7)
+                        cb2.ax.tick_params(colors=ucharts.color('fg'), labelsize=6)
+                        plt.tight_layout()
+                        st.pyplot(fig_bsw, transparent=True)
+                        plt.close()
 
-                # ── Row 2: Waterfall for a single patient ─────────────────
-                st.markdown("---")
-                st.markdown("#### Waterfall Chart — Single Patient Explanation")
-                st.markdown(
-                    '<div class="alert-info">Select a patient sample to see exactly which features '
+                    # ── Row 2: Waterfall for a single patient ─────────────────
+                    st.markdown("---")
+                    st.markdown("#### Waterfall Chart — Single Patient Explanation")
+                    st.markdown(
+                        '<div class="alert-info">Select a patient sample to see exactly which features '
                     'pushed the prediction <b style="color:#ef4444;">toward High Risk</b> '
                     'or <b style="color:#10b981;">toward Low Risk</b> for that individual.</div>',
-                    unsafe_allow_html=True)
+                        unsafe_allow_html=True)
 
-                sample_idx = st.slider(
-                    "Patient Sample Index",
-                    0, len(shap_vals)-1, 0,
-                    key="shap_waterfall_idx"
-                )
-                sv_single  = shap_vals[sample_idx]
-                expected_v = float(np.mean(shap_vals.sum(axis=1))) if np.mean(shap_vals.sum(axis=1)) > 0 else 0.5
+                    sample_idx = st.slider(
+                        "Patient Sample Index",
+                        0, len(shap_vals)-1, 0,
+                        key="shap_waterfall_idx"
+                    )
+                    sv_single  = shap_vals[sample_idx]
+                    expected_v = float(np.mean(shap_vals.sum(axis=1))) if np.mean(shap_vals.sum(axis=1)) > 0 else 0.5
 
-                # Build waterfall data: sort by absolute SHAP desc, show top-12
-                wf_pairs = sorted(zip(shap_display, sv_single),
-                                  key=lambda x: abs(x[1]), reverse=True)[:12]
-                wf_labels_raw, wf_shap_vals = zip(*wf_pairs)
-                wf_labels = list(wf_labels_raw)
-                wf_shap   = np.array(wf_shap_vals)
-                # cumulative baseline bars
-                base     = expected_v
-                wf_starts, wf_ends = [], []
-                cur = base
-                for sv_w in wf_shap[::-1]:   # bottom-to-top in plot
-                    wf_starts.append(cur)
-                    cur += sv_w
-                    wf_ends.append(cur)
+                    # Build waterfall data: sort by absolute SHAP desc, show top-12
+                    wf_pairs = sorted(zip(shap_display, sv_single),
+                                      key=lambda x: abs(x[1]), reverse=True)[:12]
+                    wf_labels_raw, wf_shap_vals = zip(*wf_pairs)
+                    wf_labels = list(wf_labels_raw)
+                    wf_shap   = np.array(wf_shap_vals)
+                    # cumulative baseline bars
+                    base     = expected_v
+                    wf_starts, wf_ends = [], []
+                    cur = base
+                    for sv_w in wf_shap[::-1]:   # bottom-to-top in plot
+                        wf_starts.append(cur)
+                        cur += sv_w
+                        wf_ends.append(cur)
 
-                fig_wf, ax_wf = plt.subplots(
-                    figsize=(9, max(5, len(wf_labels)*0.52)),
-                    facecolor='none')
-                ax_wf.set_facecolor('none')
-                wf_labels_rev = wf_labels[::-1]
-                wf_shap_rev   = wf_shap[::-1]
-                wf_c = [ucharts.color('risk_high') if v >= 0 else ucharts.color('risk_low') for v in wf_shap_rev]
-                y_pos_wf = range(len(wf_labels_rev))
-                for iy, (start, sv_w, col) in enumerate(
-                        zip(wf_starts, wf_shap_rev, wf_c)):
-                    ax_wf.barh(iy, sv_w, left=start, color=col,
-                               height=0.6, alpha=0.88)
-                    ax_wf.text(
-                        start + sv_w + (0.003 if sv_w >= 0 else -0.003),
-                        iy,
-                        f"{'+' if sv_w>=0 else ''}{sv_w:.4f}",
-                        va='center',
-                        ha='left' if sv_w >= 0 else 'right',
-                        color=ucharts.color('fg'), fontsize=8, fontweight='700')
-                ax_wf.axvline(base, color=ucharts.color('fg_muted'), linestyle=':', linewidth=1.5,
-                              label=f"Base value={base:.3f}")
-                ax_wf.set_yticks(list(y_pos_wf))
-                ax_wf.set_yticklabels(wf_labels_rev, color=ucharts.color('fg'), fontsize=8.5)
-                ax_wf.set_xlabel("Model Output (probability)", color=ucharts.color('fg'), fontsize=9)
-                ax_wf.set_title(
-                    f"Waterfall — Patient #{sample_idx}  "
+                    fig_wf, ax_wf = plt.subplots(
+                        figsize=(9, max(5, len(wf_labels)*0.52)),
+                        facecolor='none')
+                    ax_wf.set_facecolor('none')
+                    wf_labels_rev = wf_labels[::-1]
+                    wf_shap_rev   = wf_shap[::-1]
+                    wf_c = [ucharts.color('risk_high') if v >= 0 else ucharts.color('risk_low') for v in wf_shap_rev]
+                    y_pos_wf = range(len(wf_labels_rev))
+                    for iy, (start, sv_w, col) in enumerate(
+                            zip(wf_starts, wf_shap_rev, wf_c)):
+                        ax_wf.barh(iy, sv_w, left=start, color=col,
+                                   height=0.6, alpha=0.88)
+                        ax_wf.text(
+                            start + sv_w + (0.003 if sv_w >= 0 else -0.003),
+                            iy,
+                            f"{'+' if sv_w>=0 else ''}{sv_w:.4f}",
+                            va='center',
+                            ha='left' if sv_w >= 0 else 'right',
+                            color=ucharts.color('fg'), fontsize=8, fontweight='700')
+                    ax_wf.axvline(base, color=ucharts.color('fg_muted'), linestyle=':', linewidth=1.5,
+                                  label=f"Base value={base:.3f}")
+                    ax_wf.set_yticks(list(y_pos_wf))
+                    ax_wf.set_yticklabels(wf_labels_rev, color=ucharts.color('fg'), fontsize=8.5)
+                    ax_wf.set_xlabel("Model Output (probability)", color=ucharts.color('fg'), fontsize=9)
+                    ax_wf.set_title(
+                        f"Waterfall — Patient #{sample_idx}  "
                     f"| Pred prob: {float(np.clip(base + np.sum(wf_shap), 0, 1)):.3f}",
-                    color=ucharts.color('fg'), fontsize=10, fontweight='700', pad=10)
-                ax_wf.tick_params(colors=ucharts.color('fg'), labelsize=8)
-                ax_wf.legend(facecolor=ucharts.color('surface'), labelcolor=ucharts.color('fg'), fontsize=8)
-                for sp in ['top','right']:   ax_wf.spines[sp].set_visible(False)
-                for sp in ['left','bottom']: ax_wf.spines[sp].set_color(ucharts.color('spine'))
-                ax_wf.grid(True, axis='x', color=ucharts.color('surface'), linestyle='--',
-                           linewidth=0.5, alpha=0.6)
-                # Legend for colours
-                red_patch   = mpatches.Patch(color=ucharts.color('risk_high'), alpha=0.88,
-                                             label='Increases Risk (+SHAP)')
-                green_patch = mpatches.Patch(color=ucharts.color('risk_low'), alpha=0.88,
-                                             label='Decreases Risk (−SHAP)')
-                ax_wf.legend(handles=[red_patch, green_patch],
-                             facecolor=ucharts.color('surface'), labelcolor=ucharts.color('fg'),
-                             fontsize=8, loc='lower right')
-                plt.tight_layout()
-                st.pyplot(fig_wf, transparent=True)
-                plt.close()
+                        color=ucharts.color('fg'), fontsize=10, fontweight='700', pad=10)
+                    ax_wf.tick_params(colors=ucharts.color('fg'), labelsize=8)
+                    ax_wf.legend(facecolor=ucharts.color('surface'), labelcolor=ucharts.color('fg'), fontsize=8)
+                    for sp in ['top','right']:   ax_wf.spines[sp].set_visible(False)
+                    for sp in ['left','bottom']: ax_wf.spines[sp].set_color(ucharts.color('spine'))
+                    ax_wf.grid(True, axis='x', color=ucharts.color('surface'), linestyle='--',
+                               linewidth=0.5, alpha=0.6)
+                    # Legend for colours
+                    red_patch   = mpatches.Patch(color=ucharts.color('risk_high'), alpha=0.88,
+                                                 label='Increases Risk (+SHAP)')
+                    green_patch = mpatches.Patch(color=ucharts.color('risk_low'), alpha=0.88,
+                                                 label='Decreases Risk (−SHAP)')
+                    ax_wf.legend(handles=[red_patch, green_patch],
+                                 facecolor=ucharts.color('surface'), labelcolor=ucharts.color('fg'),
+                                 fontsize=8, loc='lower right')
+                    plt.tight_layout()
+                    st.pyplot(fig_wf, transparent=True)
+                    plt.close()
 
-                # ── Row 3: SHAP vs Feature Value Scatter ──────────────────
-                st.markdown("---")
-                st.markdown("#### SHAP Value vs Feature Value — Dependence Plots")
-                st.markdown(
-                    '<div class="alert-info">Shows how the SHAP value of a feature changes as its '
+                    # ── Row 3: SHAP vs Feature Value Scatter ──────────────────
+                    st.markdown("---")
+                    st.markdown("#### SHAP Value vs Feature Value — Dependence Plots")
+                    st.markdown(
+                        '<div class="alert-info">Shows how the SHAP value of a feature changes as its '
                     'value increases. Helps understand non-linear relationships captured by the model.</div>',
-                    unsafe_allow_html=True)
+                        unsafe_allow_html=True)
 
-                dep_sel = st.selectbox(
-                    "Select Feature for Dependence Plot",
-                    s_labels,  # already sorted most→least important
-                    key="shap_dep_feat"
-                )
-                dep_idx_in_sorted = s_labels.index(dep_sel)
-                dep_real_idx = sorted_idx[dep_idx_in_sorted]
-                dep_feat_vals = bg_data.values[:, dep_real_idx]
-                dep_shap_vals = shap_vals[:, dep_real_idx]
+                    dep_sel = st.selectbox(
+                        "Select Feature for Dependence Plot",
+                        s_labels,  # already sorted most→least important
+                        key="shap_dep_feat"
+                    )
+                    dep_idx_in_sorted = s_labels.index(dep_sel)
+                    dep_real_idx = sorted_idx[dep_idx_in_sorted]
+                    dep_feat_vals = bg_data.values[:, dep_real_idx]
+                    dep_shap_vals = shap_vals[:, dep_real_idx]
 
-                # Colour by most correlated other feature
-                dep_col_idx = sorted_idx[min(dep_idx_in_sorted+1, len(sorted_idx)-1)]
-                dep_col_vals = bg_data.values[:, dep_col_idx]
-                col_label = shap_display[dep_col_idx]
-                ptp_c = dep_col_vals.max() - dep_col_vals.min()
-                dep_col_norm = (dep_col_vals - dep_col_vals.min()) / (ptp_c + 1e-9)
+                    # Colour by most correlated other feature
+                    dep_col_idx = sorted_idx[min(dep_idx_in_sorted+1, len(sorted_idx)-1)]
+                    dep_col_vals = bg_data.values[:, dep_col_idx]
+                    col_label = shap_display[dep_col_idx]
+                    ptp_c = dep_col_vals.max() - dep_col_vals.min()
+                    dep_col_norm = (dep_col_vals - dep_col_vals.min()) / (ptp_c + 1e-9)
 
-                fig_dep, ax_dep = plt.subplots(figsize=(9, 4.5), facecolor='none')
-                ax_dep.set_facecolor('none')
-                sc = ax_dep.scatter(dep_feat_vals, dep_shap_vals,
-                                    c=dep_col_norm, cmap=ucharts.cmap('sequential', reverse=True),
-                                    alpha=0.55, s=18, linewidths=0)
-                ax_dep.axhline(0, color=ucharts.color('fg_muted'), linestyle='--', linewidth=1)
-                ax_dep.set_xlabel(f"{dep_sel} (scaled)", color=ucharts.color('fg'), fontsize=9)
-                ax_dep.set_ylabel(f"SHAP value of {dep_sel}", color=ucharts.color('fg'), fontsize=9)
-                ax_dep.set_title(
-                    f"Dependence Plot: {dep_sel}  (colour = {col_label})",
-                    color=ucharts.color('fg'), fontsize=10, fontweight='700', pad=10)
-                ax_dep.tick_params(colors=ucharts.color('fg'), labelsize=8)
-                for sp in ['top','right']:   ax_dep.spines[sp].set_visible(False)
-                for sp in ['left','bottom']: ax_dep.spines[sp].set_color(ucharts.color('spine'))
-                cb_dep = plt.colorbar(sc, ax=ax_dep, fraction=0.025, pad=0.02)
-                cb_dep.set_label(col_label, color=ucharts.color('fg'), fontsize=8)
-                cb_dep.ax.tick_params(colors=ucharts.color('fg'), labelsize=7)
-                plt.tight_layout()
-                st.pyplot(fig_dep, transparent=True)
-                plt.close()
+                    fig_dep, ax_dep = plt.subplots(figsize=(9, 4.5), facecolor='none')
+                    ax_dep.set_facecolor('none')
+                    sc = ax_dep.scatter(dep_feat_vals, dep_shap_vals,
+                                        c=dep_col_norm, cmap=ucharts.cmap('sequential', reverse=True),
+                                        alpha=0.55, s=18, linewidths=0)
+                    ax_dep.axhline(0, color=ucharts.color('fg_muted'), linestyle='--', linewidth=1)
+                    ax_dep.set_xlabel(f"{dep_sel} (scaled)", color=ucharts.color('fg'), fontsize=9)
+                    ax_dep.set_ylabel(f"SHAP value of {dep_sel}", color=ucharts.color('fg'), fontsize=9)
+                    ax_dep.set_title(
+                        f"Dependence Plot: {dep_sel}  (colour = {col_label})",
+                        color=ucharts.color('fg'), fontsize=10, fontweight='700', pad=10)
+                    ax_dep.tick_params(colors=ucharts.color('fg'), labelsize=8)
+                    for sp in ['top','right']:   ax_dep.spines[sp].set_visible(False)
+                    for sp in ['left','bottom']: ax_dep.spines[sp].set_color(ucharts.color('spine'))
+                    cb_dep = plt.colorbar(sc, ax=ax_dep, fraction=0.025, pad=0.02)
+                    cb_dep.set_label(col_label, color=ucharts.color('fg'), fontsize=8)
+                    cb_dep.ax.tick_params(colors=ucharts.color('fg'), labelsize=7)
+                    plt.tight_layout()
+                    st.pyplot(fig_dep, transparent=True)
+                    plt.close()
 
-                # ── SHAP Summary Table ─────────────────────────────────────
-                st.markdown("---")
-                st.markdown("#### SHAP Feature Impact Table — Global Summary")
-                shap_df = pd.DataFrame({
-                    "Rank":          list(range(1, len(sorted_idx)+1)),
-                    "Feature":       s_labels,
-                    "Mean |SHAP|": [f"{v:.5f}" for v in s_vals],
-                    "% of Impact":   [f"{v/s_vals.sum()*100:.2f}%" for v in s_vals],
-                    "Avg Direction": [
-                        "Increases Risk" if shap_vals[:, i].mean() > 0
-                        else "Decreases Risk"
-                        for i in sorted_idx
-                    ],
-                })
-                st.dataframe(shap_df, hide_index=True, use_container_width=True)
-                st.download_button(
-                    "Export SHAP Table (CSV)",
-                    shap_df.to_csv(index=False).encode(),
-                    f"shap_impact_{shap_sel.replace(' ','_')}_{datetime.now().strftime('%Y%m%d')}.csv",
-                    "text/csv", use_container_width=True)
+                    # ── SHAP Summary Table ─────────────────────────────────────
+                    st.markdown("---")
+                    st.markdown("#### SHAP Feature Impact Table — Global Summary")
+                    shap_df = pd.DataFrame({
+                        "Rank":          list(range(1, len(sorted_idx)+1)),
+                        "Feature":       s_labels,
+                        "Mean |SHAP|": [f"{v:.5f}" for v in s_vals],
+                        "% of Impact":   [f"{v/s_vals.sum()*100:.2f}%" for v in s_vals],
+                        "Avg Direction": [
+                            "Increases Risk" if shap_vals[:, i].mean() > 0
+                            else "Decreases Risk"
+                            for i in sorted_idx
+                        ],
+                    })
+                    st.dataframe(shap_df, hide_index=True, use_container_width=True)
+                    st.download_button(
+                        "Export SHAP Table (CSV)",
+                        shap_df.to_csv(index=False).encode(),
+                        f"shap_impact_{shap_sel.replace(' ','_')}_{datetime.now().strftime('%Y%m%d')}.csv",
+                        "text/csv", use_container_width=True)
 
-                st.markdown(
-                    '<div class="alert-info" style="font-size:.82em;">'
+                    st.markdown(
+                        '<div class="alert-info" style="font-size:.82em;">'
                     '<b>SHAP Interpretation Guide:</b><br>'
                     '• <b>Mean |SHAP|</b> = average magnitude of this feature across all patients.<br>'
                     '• <b>Beeswarm</b>: Red dots = high feature value, Blue = low, '
                     'right of centre = pushes toward High Risk.<br>'
                     '• <b>Waterfall</b>: Shows exact contribution of top features for ONE patient.<br>'
                     '• <b>Dependence Plot</b>: Reveals non-linear effects — how SHAP changes as feature increases.</div>',
-                    unsafe_allow_html=True)
-            else:
-                st.warning("Could not compute SHAP values. Please try a different model.")
+                        unsafe_allow_html=True)
+                else:
+                    st.warning("Could not compute SHAP values. Please try a different model.")
 
     # ══════════════════════════════════════════════════════════════════
     # TAB 9 — Threshold & Clinical Utility   (Run 4)
     # ══════════════════════════════════════════════════════════════════
-    with t9:
-        section_header("T", "Threshold & Clinical Utility",
-                       "How the decision threshold was chosen, and what it costs")
+    if 'Threshold & Clinical Utility' in _slot:
+        with _slot['Threshold & Clinical Utility']:
+            section_header("T", "Threshold & Clinical Utility",
+                           "How the decision threshold was chosen, and what it costs")
 
-        thr_cfg = load_thresholds()
-        # Tab 9 is the one place the virtual Ensemble entry belongs — it is the app's
-        # default prediction path, so its operating point matters most here.
-        thr_results = load_results(include_virtual=True)
-        thr_models = [m for m in thr_results if thr_results[m].get("threshold_profile")]
+            thr_cfg = load_thresholds()
+            # Tab 9 is the one place the virtual Ensemble entry belongs — it is the app's
+            # default prediction path, so its operating point matters most here.
+            thr_results = load_results(include_virtual=True)
+            thr_models = [m for m in thr_results if thr_results[m].get("threshold_profile")]
 
-        if not thr_models:
-            st.markdown('<div class="alert-warning">No threshold analysis found. '
+            if not thr_models:
+                st.markdown('<div class="alert-warning">No threshold analysis found. '
                         'Retrain the models to generate it.</div>', unsafe_allow_html=True)
-        else:
-            pol = thr_cfg.get("policy", {})
-            st.markdown(f"""
+            else:
+                pol = thr_cfg.get("policy", {})
+                st.markdown(f"""
             <div class="panel">
             <h4 style="color:#f59e0b;margin-bottom:8px;">Why not 0.50?</h4>
             <p style="color:#94a3b8;font-size:.87em;line-height:1.7;margin:0;">
@@ -3435,145 +3507,146 @@ def page_model_performance(user):
             rather than inherited from convention.
             </p></div>""", unsafe_allow_html=True)
 
-            thr_sel = st.selectbox("Model", thr_models,
-                                   index=thr_models.index("Ensemble Voting")
-                                   if "Ensemble Voting" in thr_models else 0,
-                                   key="thr_tab_model")
-            prof = thr_results[thr_sel]["threshold_profile"]
-            ops  = prof["operating_points"]
+                thr_sel = st.selectbox("Model", thr_models,
+                                       index=thr_models.index("Ensemble Voting")
+                                       if "Ensemble Voting" in thr_models else 0,
+                                       key="thr_tab_model")
+                prof = thr_results[thr_sel]["threshold_profile"]
+                ops  = prof["operating_points"]
 
-            # ── Operating point comparison ─────────────────────────────
-            st.markdown("#### Candidate Operating Points")
-            op_rows = []
-            for key, label in [("rule_out", "Rule-out (≥95% sens)"),
-                               ("recommended", "★ Recommended (≥85% sens)"),
-                               ("rule_in", "Rule-in (≥90% spec)"),
-                               ("youden_j", "Youden's J"),
-                               ("f2_optimal", "F2-optimal"),
-                               ("legacy_half", "Legacy 0.50")]:
-                o = ops[key]
-                op_rows.append({
-                    "Operating Point": label,
-                    "Threshold": f"{o['threshold']:.3f}",
-                    "Sensitivity": f"{o['sensitivity']:.1%}",
-                    "Specificity": f"{o['specificity']:.1%}",
-                    "PPV": f"{o['ppv']:.1%}",
-                    "NPV": f"{o['npv']:.1%}",
-                    "Missed / 1,000": f"{o['missed_per_1000']:.0f}",
-                })
-            st.dataframe(pd.DataFrame(op_rows), hide_index=True, use_container_width=True)
+                # ── Operating point comparison ─────────────────────────────
+                st.markdown("#### Candidate Operating Points")
+                op_rows = []
+                for key, label in [("rule_out", "Rule-out (≥95% sens)"),
+                                   ("recommended", "★ Recommended (≥85% sens)"),
+                                   ("rule_in", "Rule-in (≥90% spec)"),
+                                   ("youden_j", "Youden's J"),
+                                   ("f2_optimal", "F2-optimal"),
+                                   ("legacy_half", "Legacy 0.50")]:
+                    o = ops[key]
+                    op_rows.append({
+                        "Operating Point": label,
+                        "Threshold": f"{o['threshold']:.3f}",
+                        "Sensitivity": f"{o['sensitivity']:.1%}",
+                        "Specificity": f"{o['specificity']:.1%}",
+                        "PPV": f"{o['ppv']:.1%}",
+                        "NPV": f"{o['npv']:.1%}",
+                        "Missed / 1,000": f"{o['missed_per_1000']:.0f}",
+                    })
+                st.dataframe(pd.DataFrame(op_rows), hide_index=True, use_container_width=True)
 
-            rec, leg = ops["recommended"], ops["legacy_half"]
-            saved = leg["missed_per_1000"] - rec["missed_per_1000"]
-            st.markdown(
-                f'<div class="alert-info">Moving from <b>0.500</b> to '
+                rec, leg = ops["recommended"], ops["legacy_half"]
+                saved = leg["missed_per_1000"] - rec["missed_per_1000"]
+                st.markdown(
+                    f'<div class="alert-info">Moving from <b>0.500</b> to '
                 f'<b>{rec["threshold"]:.3f}</b> recovers <b>{saved:.0f} missed cases '
                 f'per 1,000 patients</b> (sensitivity {leg["sensitivity"]:.1%} → '
-                f'{rec["sensitivity"]:.1%}), at a specificity cost of '
-                f'{leg["specificity"] - rec["specificity"]:.1%}.</div>',
-                unsafe_allow_html=True)
+                    f'{rec["sensitivity"]:.1%}), at a specificity cost of '
+                    f'{leg["specificity"] - rec["specificity"]:.1%}.</div>',
+                    unsafe_allow_html=True)
 
-            # ── Sweep chart ────────────────────────────────────────────
-            st.markdown("---")
-            st.markdown("#### Sensitivity / Specificity Trade-off")
-            sweep = prof["sweep"]
-            sx = [s["threshold"] for s in sweep]
-            fig_sw, ax_sw = plt.subplots(figsize=(9, 3.8), facecolor='none')
-            ax_sw.set_facecolor('none')
-            # Four operating characteristics. None of them is a risk band, so they take
-            # the categorical ramp — risk hues here would imply a clinical reading the
-            # curves do not carry.
-            for key, col, lbl in zip(
-                    ["sensitivity", "specificity", "ppv", "npv"],
-                    ucharts.categorical(4),
-                    ["Sensitivity (recall)", "Specificity", "PPV (precision)", "NPV"]):
-                ax_sw.plot(sx, [s[key] for s in sweep], color=col, lw=2, label=lbl)
-            ax_sw.axvline(rec["threshold"], color=ucharts.color('risk_borderline'), ls='--', lw=1.8,
-                          label=f"Operating point ({rec['threshold']:.3f})")
-            ax_sw.axvline(0.50, color=ucharts.color('reference'), ls=':', lw=1.5, label="Legacy 0.50")
-            ax_sw.axhline(pol.get("target_sensitivity", 0.85), color=ucharts.color('risk_high'),
-                          ls=':', lw=1, alpha=0.5)
-            ax_sw.set_xlabel("Decision threshold", color=ucharts.color('fg'), fontsize=9)
-            ax_sw.set_ylabel("Metric value", color=ucharts.color('fg'), fontsize=9)
-            ax_sw.set_ylim(0, 1.02)
-            ax_sw.tick_params(colors=ucharts.color('fg'), labelsize=8)
-            ax_sw.grid(True, color=ucharts.color('surface'), ls='--', lw=0.5, alpha=0.6)
-            for sp in ['top', 'right']:   ax_sw.spines[sp].set_visible(False)
-            for sp in ['left', 'bottom']: ax_sw.spines[sp].set_color(ucharts.color('spine'))
-            ax_sw.legend(facecolor=ucharts.color('surface'), labelcolor=ucharts.color('fg'), fontsize=7.5,
-                         loc='center right')
-            plt.tight_layout()
-            st.pyplot(fig_sw, transparent=True)
-            plt.close()
+                # ── Sweep chart ────────────────────────────────────────────
+                st.markdown("---")
+                st.markdown("#### Sensitivity / Specificity Trade-off")
+                sweep = prof["sweep"]
+                sx = [s["threshold"] for s in sweep]
+                fig_sw, ax_sw = plt.subplots(figsize=(9, 3.8), facecolor='none')
+                ax_sw.set_facecolor('none')
+                # Four operating characteristics. None of them is a risk band, so they take
+                # the categorical ramp — risk hues here would imply a clinical reading the
+                # curves do not carry.
+                for key, col, lbl in zip(
+                        ["sensitivity", "specificity", "ppv", "npv"],
+                        ucharts.categorical(4),
+                        ["Sensitivity (recall)", "Specificity", "PPV (precision)", "NPV"]):
+                    ax_sw.plot(sx, [s[key] for s in sweep], color=col, lw=2, label=lbl)
+                ax_sw.axvline(rec["threshold"], color=ucharts.color('risk_borderline'), ls='--', lw=1.8,
+                              label=f"Operating point ({rec['threshold']:.3f})")
+                ax_sw.axvline(0.50, color=ucharts.color('reference'), ls=':', lw=1.5, label="Legacy 0.50")
+                ax_sw.axhline(pol.get("target_sensitivity", 0.85), color=ucharts.color('risk_high'),
+                              ls=':', lw=1, alpha=0.5)
+                ax_sw.set_xlabel("Decision threshold", color=ucharts.color('fg'), fontsize=9)
+                ax_sw.set_ylabel("Metric value", color=ucharts.color('fg'), fontsize=9)
+                ax_sw.set_ylim(0, 1.02)
+                ax_sw.tick_params(colors=ucharts.color('fg'), labelsize=8)
+                ax_sw.grid(True, color=ucharts.color('surface'), ls='--', lw=0.5, alpha=0.6)
+                for sp in ['top', 'right']:   ax_sw.spines[sp].set_visible(False)
+                for sp in ['left', 'bottom']: ax_sw.spines[sp].set_color(ucharts.color('spine'))
+                ax_sw.legend(facecolor=ucharts.color('surface'), labelcolor=ucharts.color('fg'), fontsize=7.5,
+                             loc='center right')
+                plt.tight_layout()
+                st.pyplot(fig_sw, transparent=True)
+                plt.close()
 
-            # ── Decision curve ─────────────────────────────────────────
-            st.markdown("---")
-            st.markdown("#### Decision Curve Analysis (Net Benefit)")
-            st.markdown(
-                '<div class="alert-info" style="font-size:.82em;">'
+                # ── Decision curve ─────────────────────────────────────────
+                st.markdown("---")
+                st.markdown("#### Decision Curve Analysis (Net Benefit)")
+                st.markdown(
+                    '<div class="alert-info" style="font-size:.82em;">'
                 'Net benefit weighs true positives against false positives using the '
                 'threshold probability as the exchange rate. A model is clinically '
                 'useful wherever its curve sits <b>above both</b> "treat all" and '
                 '"treat none". <i>(Vickers &amp; Elkin, 2006)</i></div>',
-                unsafe_allow_html=True)
-            nb = prof["net_benefit"]
-            nx = [p["pt"] for p in nb]
-            fig_nb, ax_nb = plt.subplots(figsize=(9, 3.6), facecolor='none')
-            ax_nb.set_facecolor('none')
-            ax_nb.plot(nx, [p["model"] for p in nb], color=ucharts.color('risk_low'), lw=2.2,
-                       label=f"{thr_sel}")
-            ax_nb.plot(nx, [p["treat_all"] for p in nb], color=ucharts.color('reference'), lw=1.5,
-                       ls='--', label="Treat all")
-            ax_nb.axhline(0, color=ucharts.color('fg_subtle'), lw=1.5, ls=':', label="Treat none")
-            ax_nb.axvline(rec["threshold"], color=ucharts.color('risk_borderline'), ls='--', lw=1.6,
-                          label=f"Operating point")
-            ax_nb.set_xlabel("Threshold probability", color=ucharts.color('fg'), fontsize=9)
-            ax_nb.set_ylabel("Net benefit", color=ucharts.color('fg'), fontsize=9)
-            ax_nb.tick_params(colors=ucharts.color('fg'), labelsize=8)
-            ax_nb.grid(True, color=ucharts.color('surface'), ls='--', lw=0.5, alpha=0.6)
-            for sp in ['top', 'right']:   ax_nb.spines[sp].set_visible(False)
-            for sp in ['left', 'bottom']: ax_nb.spines[sp].set_color(ucharts.color('spine'))
-            ax_nb.legend(facecolor=ucharts.color('surface'), labelcolor=ucharts.color('fg'), fontsize=8)
-            plt.tight_layout()
-            st.pyplot(fig_nb, transparent=True)
-            plt.close()
+                    unsafe_allow_html=True)
+                nb = prof["net_benefit"]
+                nx = [p["pt"] for p in nb]
+                fig_nb, ax_nb = plt.subplots(figsize=(9, 3.6), facecolor='none')
+                ax_nb.set_facecolor('none')
+                ax_nb.plot(nx, [p["model"] for p in nb], color=ucharts.color('risk_low'), lw=2.2,
+                           label=f"{thr_sel}")
+                ax_nb.plot(nx, [p["treat_all"] for p in nb], color=ucharts.color('reference'), lw=1.5,
+                           ls='--', label="Treat all")
+                ax_nb.axhline(0, color=ucharts.color('fg_subtle'), lw=1.5, ls=':', label="Treat none")
+                ax_nb.axvline(rec["threshold"], color=ucharts.color('risk_borderline'), ls='--', lw=1.6,
+                              label=f"Operating point")
+                ax_nb.set_xlabel("Threshold probability", color=ucharts.color('fg'), fontsize=9)
+                ax_nb.set_ylabel("Net benefit", color=ucharts.color('fg'), fontsize=9)
+                ax_nb.tick_params(colors=ucharts.color('fg'), labelsize=8)
+                ax_nb.grid(True, color=ucharts.color('surface'), ls='--', lw=0.5, alpha=0.6)
+                for sp in ['top', 'right']:   ax_nb.spines[sp].set_visible(False)
+                for sp in ['left', 'bottom']: ax_nb.spines[sp].set_color(ucharts.color('spine'))
+                ax_nb.legend(facecolor=ucharts.color('surface'), labelcolor=ucharts.color('fg'), fontsize=8)
+                plt.tight_layout()
+                st.pyplot(fig_nb, transparent=True)
+                plt.close()
 
-            # ── Risk bands ─────────────────────────────────────────────
-            st.markdown("---")
-            st.markdown("#### Risk Bands in Use")
-            rb = prof["risk_bands"]
-            st.dataframe(pd.DataFrame([
-                {"Band": "Low", "Probability": f"< {rb['low_max']:.3f}",
-                 "Action": "Confidently excluded — routine review"},
-                {"Band": "Borderline", "Probability": f"{rb['low_max']:.3f} – {rb['borderline_max']:.3f}",
-                 "Action": "Below action threshold — lifestyle advice, re-assess"},
-                {"Band": "Intermediate", "Probability": f"{rb['borderline_max']:.3f} – {rb['intermediate_max']:.3f}",
-                 "Action": "Above action threshold — further testing indicated"},
-                {"Band": "High", "Probability": f"≥ {rb['intermediate_max']:.3f}",
-                 "Action": "Escalate directly to clinical review"},
-            ]), hide_index=True, use_container_width=True)
+                # ── Risk bands ─────────────────────────────────────────────
+                st.markdown("---")
+                st.markdown("#### Risk Bands in Use")
+                rb = prof["risk_bands"]
+                st.dataframe(pd.DataFrame([
+                    {"Band": "Low", "Probability": f"< {rb['low_max']:.3f}",
+                     "Action": "Confidently excluded — routine review"},
+                    {"Band": "Borderline", "Probability": f"{rb['low_max']:.3f} – {rb['borderline_max']:.3f}",
+                     "Action": "Below action threshold — lifestyle advice, re-assess"},
+                    {"Band": "Intermediate", "Probability": f"{rb['borderline_max']:.3f} – {rb['intermediate_max']:.3f}",
+                     "Action": "Above action threshold — further testing indicated"},
+                    {"Band": "High", "Probability": f"≥ {rb['intermediate_max']:.3f}",
+                     "Action": "Escalate directly to clinical review"},
+                ]), hide_index=True, use_container_width=True)
 
-            st.download_button(
-                "Export Threshold Sweep (CSV)",
-                pd.DataFrame(sweep).to_csv(index=False).encode(),
-                f"threshold_sweep_{thr_sel.replace(' ', '_')}.csv",
-                "text/csv", use_container_width=True)
+                st.download_button(
+                    "Export Threshold Sweep (CSV)",
+                    pd.DataFrame(sweep).to_csv(index=False).encode(),
+                    f"threshold_sweep_{thr_sel.replace(' ', '_')}.csv",
+                    "text/csv", use_container_width=True)
 
     # ══════════════════════════════════════════════════════════════════
     # TAB 10 — Subgroup Performance & Fairness   (Run 5)
     # ══════════════════════════════════════════════════════════════════
-    with t10:
-        section_header("F", "Subgroup Performance & Fairness",
-                       "Where the model is strong, where it is weak, and why")
+    if 'Subgroup Performance & Fairness' in _slot:
+        with _slot['Subgroup Performance & Fairness']:
+            section_header("F", "Subgroup Performance & Fairness",
+                           "Where the model is strong, where it is weak, and why")
 
-        subs = get_subgroup_performance("Ensemble Voting")
-        thr_cfg2 = load_thresholds()
+            subs = get_subgroup_performance("Ensemble Voting")
+            thr_cfg2 = load_thresholds()
 
-        if not subs:
-            st.markdown('<div class="alert-warning">No subgroup analysis found. '
+            if not subs:
+                st.markdown('<div class="alert-warning">No subgroup analysis found. '
                         'Retrain the models to generate it.</div>', unsafe_allow_html=True)
-        else:
-            st.markdown("""
+            else:
+                st.markdown("""
             <div class="panel">
             <h4 style="color:#60a5fa;margin-bottom:8px;">How to read this</h4>
             <p style="color:#94a3b8;font-size:.86em;line-height:1.75;margin:0;">
@@ -3598,134 +3671,135 @@ def page_model_performance(user):
             age-stratified, equalising sensitivity at ~85% across every band.
             </p></div>""", unsafe_allow_html=True)
 
-            # ── Stratified thresholds in force ─────────────────────────
-            strat_ens = (thr_cfg2.get("stratified", {}) or {}).get("Ensemble Voting", {})
-            if strat_ens:
-                st.markdown("#### Age-Stratified Operating Points in Force")
-                band_lookup = {lv["level"]: lv for lv in subs.get("Age band", [])}
-                srows = []
-                for label, info in sorted(strat_ens.items(),
-                                          key=lambda kv: kv[1]["band_index"]):
-                    lv = band_lookup.get(label, {})
-                    srows.append({
-                        "Age Band": label,
-                        "Threshold": f"{info['threshold']:.3f}",
-                        "n (holdout)": f"{lv.get('n', 0):,}",
-                        "Prevalence": f"{lv.get('prevalence', 0):.1%}",
-                        "Sensitivity": f"{lv.get('sensitivity', 0):.1%}",
-                        "Specificity": f"{lv.get('specificity', 0):.1%}",
-                        "PPV": f"{lv.get('ppv', 0):.1%}",
-                        "Flagged": f"{lv.get('flagged_rate', 0):.1%}",
-                    })
-                st.dataframe(pd.DataFrame(srows), hide_index=True,
-                             use_container_width=True)
-                st.markdown(
-                    '<div class="alert-info">Sensitivity is now equalised across age '
+                # ── Stratified thresholds in force ─────────────────────────
+                strat_ens = (thr_cfg2.get("stratified", {}) or {}).get("Ensemble Voting", {})
+                if strat_ens:
+                    st.markdown("#### Age-Stratified Operating Points in Force")
+                    band_lookup = {lv["level"]: lv for lv in subs.get("Age band", [])}
+                    srows = []
+                    for label, info in sorted(strat_ens.items(),
+                                              key=lambda kv: kv[1]["band_index"]):
+                        lv = band_lookup.get(label, {})
+                        srows.append({
+                            "Age Band": label,
+                            "Threshold": f"{info['threshold']:.3f}",
+                            "n (holdout)": f"{lv.get('n', 0):,}",
+                            "Prevalence": f"{lv.get('prevalence', 0):.1%}",
+                            "Sensitivity": f"{lv.get('sensitivity', 0):.1%}",
+                            "Specificity": f"{lv.get('specificity', 0):.1%}",
+                            "PPV": f"{lv.get('ppv', 0):.1%}",
+                            "Flagged": f"{lv.get('flagged_rate', 0):.1%}",
+                        })
+                    st.dataframe(pd.DataFrame(srows), hide_index=True,
+                                 use_container_width=True)
+                    st.markdown(
+                        '<div class="alert-info">Sensitivity is now equalised across age '
                     'bands — the <b>equal opportunity</b> fairness criterion. Under a '
                     'single global threshold it ranged from 64% to 98%.</div>',
-                    unsafe_allow_html=True)
+                        unsafe_allow_html=True)
 
-            # ── Per-dimension detail ───────────────────────────────────
-            st.markdown("---")
-            dim_sel = st.selectbox("Subgroup dimension", list(subs.keys()),
-                                   key="fair_dim_sel")
-            levels = subs[dim_sel]
+                # ── Per-dimension detail ───────────────────────────────────
+                st.markdown("---")
+                dim_sel = st.selectbox("Subgroup dimension", list(subs.keys()),
+                                       key="fair_dim_sel")
+                levels = subs[dim_sel]
 
-            st.dataframe(pd.DataFrame([{
-                "Level": lv["level"],
-                "n": f"{lv['n']:,}",
-                "Prevalence": f"{lv['prevalence']:.1%}",
-                "AUC": f"{lv['auc']:.4f}",
-                "95% CI": (f"{lv['auc_ci_low']:.3f} – {lv['auc_ci_high']:.3f}"
-                           if lv["auc_ci_low"] is not None else "—"),
-                "Brier": f"{lv['brier']:.4f}",
-                "Calib. gap": f"{lv['calibration_gap']:+.3f}",
-                "Sensitivity": f"{lv['sensitivity']:.1%}",
-                "Specificity": f"{lv['specificity']:.1%}",
-            } for lv in levels]), hide_index=True, use_container_width=True)
+                st.dataframe(pd.DataFrame([{
+                    "Level": lv["level"],
+                    "n": f"{lv['n']:,}",
+                    "Prevalence": f"{lv['prevalence']:.1%}",
+                    "AUC": f"{lv['auc']:.4f}",
+                    "95% CI": (f"{lv['auc_ci_low']:.3f} – {lv['auc_ci_high']:.3f}"
+                               if lv["auc_ci_low"] is not None else "—"),
+                    "Brier": f"{lv['brier']:.4f}",
+                    "Calib. gap": f"{lv['calibration_gap']:+.3f}",
+                    "Sensitivity": f"{lv['sensitivity']:.1%}",
+                    "Specificity": f"{lv['specificity']:.1%}",
+                } for lv in levels]), hide_index=True, use_container_width=True)
 
-            # ── AUC with CI, and calibration gap ───────────────────────
-            lbls = [lv["level"] for lv in levels]
-            aucs_s = [lv["auc"] for lv in levels]
-            errs = [[lv["auc"] - (lv["auc_ci_low"] or lv["auc"]) for lv in levels],
-                    [(lv["auc_ci_high"] or lv["auc"]) - lv["auc"] for lv in levels]]
+                # ── AUC with CI, and calibration gap ───────────────────────
+                lbls = [lv["level"] for lv in levels]
+                aucs_s = [lv["auc"] for lv in levels]
+                errs = [[lv["auc"] - (lv["auc_ci_low"] or lv["auc"]) for lv in levels],
+                        [(lv["auc_ci_high"] or lv["auc"]) - lv["auc"] for lv in levels]]
 
-            cfa, cfb = st.columns(2)
-            with cfa:
-                st.markdown("**Discrimination (AUC ± 95% CI)**")
-                fig_f, ax_f = plt.subplots(figsize=(5.4, 3.4), facecolor='none')
-                ax_f.set_facecolor('none')
-                bars_f = ax_f.barh(lbls[::-1], aucs_s[::-1],
-                                   xerr=[errs[0][::-1], errs[1][::-1]],
-                                   color=[ucharts.color('risk_low') if a >= 0.80 else ucharts.color('risk_borderline')
-                                          if a >= 0.75 else ucharts.color('risk_high')
-                                          for a in aucs_s][::-1],
-                                   height=0.6, ecolor=ucharts.color('reference'), capsize=3)
-                overall = results.get("Random Forest", {}).get("auc", 0.80)
-                ax_f.axvline(overall, color=ucharts.color('primary'), ls='--', lw=1.5,
-                             label=f"Overall ({overall:.3f})")
-                ax_f.set_xlim(0.5, 0.95)
-                ax_f.set_xlabel("AUC", color=ucharts.color('fg'), fontsize=8.5)
-                ax_f.tick_params(colors=ucharts.color('fg'), labelsize=8)
-                for sp in ['top', 'right']:   ax_f.spines[sp].set_visible(False)
-                for sp in ['left', 'bottom']: ax_f.spines[sp].set_color(ucharts.color('spine'))
-                ax_f.legend(facecolor=ucharts.color('surface'), labelcolor=ucharts.color('fg'), fontsize=7.5)
-                plt.tight_layout()
-                st.pyplot(fig_f, transparent=True)
-                plt.close()
+                cfa, cfb = st.columns(2)
+                with cfa:
+                    st.markdown("**Discrimination (AUC ± 95% CI)**")
+                    fig_f, ax_f = plt.subplots(figsize=(5.4, 3.4), facecolor='none')
+                    ax_f.set_facecolor('none')
+                    bars_f = ax_f.barh(lbls[::-1], aucs_s[::-1],
+                                       xerr=[errs[0][::-1], errs[1][::-1]],
+                                       color=[ucharts.color('risk_low') if a >= 0.80 else ucharts.color('risk_borderline')
+                                              if a >= 0.75 else ucharts.color('risk_high')
+                                              for a in aucs_s][::-1],
+                                       height=0.6, ecolor=ucharts.color('reference'), capsize=3)
+                    overall = results.get("Random Forest", {}).get("auc", 0.80)
+                    ax_f.axvline(overall, color=ucharts.color('primary'), ls='--', lw=1.5,
+                                 label=f"Overall ({overall:.3f})")
+                    ax_f.set_xlim(0.5, 0.95)
+                    ax_f.set_xlabel("AUC", color=ucharts.color('fg'), fontsize=8.5)
+                    ax_f.tick_params(colors=ucharts.color('fg'), labelsize=8)
+                    for sp in ['top', 'right']:   ax_f.spines[sp].set_visible(False)
+                    for sp in ['left', 'bottom']: ax_f.spines[sp].set_color(ucharts.color('spine'))
+                    ax_f.legend(facecolor=ucharts.color('surface'), labelcolor=ucharts.color('fg'), fontsize=7.5)
+                    plt.tight_layout()
+                    st.pyplot(fig_f, transparent=True)
+                    plt.close()
 
-            with cfb:
-                st.markdown("**Calibration gap (predicted − observed)**")
-                gaps = [lv["calibration_gap"] for lv in levels]
-                fig_g, ax_g = plt.subplots(figsize=(5.4, 3.4), facecolor='none')
-                ax_g.set_facecolor('none')
-                ax_g.barh(lbls[::-1], gaps[::-1],
-                          color=[ucharts.color('risk_low') if abs(g) < 0.02 else ucharts.color('risk_borderline')
-                                 if abs(g) < 0.05 else ucharts.color('risk_high')
-                                 for g in gaps][::-1], height=0.6)
-                ax_g.axvline(0, color=ucharts.color('fg_muted'), lw=1.2)
-                ax_g.axvspan(-0.02, 0.02, color=ucharts.color('risk_low'), alpha=0.10)
-                ax_g.set_xlabel("Gap (0 = perfectly calibrated)",
-                                color=ucharts.color('fg'), fontsize=8.5)
-                ax_g.tick_params(colors=ucharts.color('fg'), labelsize=8)
-                for sp in ['top', 'right']:   ax_g.spines[sp].set_visible(False)
-                for sp in ['left', 'bottom']: ax_g.spines[sp].set_color(ucharts.color('spine'))
-                plt.tight_layout()
-                st.pyplot(fig_g, transparent=True)
-                plt.close()
+                with cfb:
+                    st.markdown("**Calibration gap (predicted − observed)**")
+                    gaps = [lv["calibration_gap"] for lv in levels]
+                    fig_g, ax_g = plt.subplots(figsize=(5.4, 3.4), facecolor='none')
+                    ax_g.set_facecolor('none')
+                    ax_g.barh(lbls[::-1], gaps[::-1],
+                              color=[ucharts.color('risk_low') if abs(g) < 0.02 else ucharts.color('risk_borderline')
+                                     if abs(g) < 0.05 else ucharts.color('risk_high')
+                                     for g in gaps][::-1], height=0.6)
+                    ax_g.axvline(0, color=ucharts.color('fg_muted'), lw=1.2)
+                    ax_g.axvspan(-0.02, 0.02, color=ucharts.color('risk_low'), alpha=0.10)
+                    ax_g.set_xlabel("Gap (0 = perfectly calibrated)",
+                                    color=ucharts.color('fg'), fontsize=8.5)
+                    ax_g.tick_params(colors=ucharts.color('fg'), labelsize=8)
+                    for sp in ['top', 'right']:   ax_g.spines[sp].set_visible(False)
+                    for sp in ['left', 'bottom']: ax_g.spines[sp].set_color(ucharts.color('spine'))
+                    plt.tight_layout()
+                    st.pyplot(fig_g, transparent=True)
+                    plt.close()
 
-            st.markdown(
-                '<div class="alert-info" style="font-size:.82em;">Green band marks '
+                st.markdown(
+                    '<div class="alert-info" style="font-size:.82em;">Green band marks '
                 '±0.02 calibration gap — the zone where predicted probabilities can be '
                 'read as literal risk estimates. Every subgroup falls inside or very '
                 'near it, including those with lower AUC.</div>',
-                unsafe_allow_html=True)
+                    unsafe_allow_html=True)
 
-            flat = [{"Dimension": d, **lv} for d, lvs in subs.items() for lv in lvs]
-            st.download_button(
-                "Export Full Subgroup Report (CSV)",
-                pd.DataFrame(flat).to_csv(index=False).encode(),
-                "subgroup_fairness_report.csv", "text/csv",
-                use_container_width=True)
+                flat = [{"Dimension": d, **lv} for d, lvs in subs.items() for lv in lvs]
+                st.download_button(
+                    "Export Full Subgroup Report (CSV)",
+                    pd.DataFrame(flat).to_csv(index=False).encode(),
+                    "subgroup_fairness_report.csv", "text/csv",
+                    use_container_width=True)
 
     # ══════════════════════════════════════════════════════════════════
     # TAB 11 — Clinical Benchmark & Feature Value   (Run 6)
     # ══════════════════════════════════════════════════════════════════
-    with t11:
-        section_header("B", "Clinical Benchmark & Feature Value",
-                       "Is it better than existing practice, and what would improve it?")
+    if 'Clinical Benchmark & Feature Value' in _slot:
+        with _slot['Clinical Benchmark & Feature Value']:
+            section_header("B", "Clinical Benchmark & Feature Value",
+                           "Is it better than existing practice, and what would improve it?")
 
-        bm = load_benchmarks()
-        if not bm:
-            st.markdown('<div class="alert-warning">No benchmark analysis found. '
+            bm = load_benchmarks()
+            if not bm:
+                st.markdown('<div class="alert-warning">No benchmark analysis found. '
                         'Retrain the models to generate it.</div>',
-                        unsafe_allow_html=True)
-        else:
-            interp = bm.get("interpretation", {})
-            cbm = bm.get("clinical_benchmark", {})
-            mlm = cbm.get("ml_model", {})
+                            unsafe_allow_html=True)
+            else:
+                interp = bm.get("interpretation", {})
+                cbm = bm.get("clinical_benchmark", {})
+                mlm = cbm.get("ml_model", {})
 
-            st.markdown(f"""
+                st.markdown(f"""
             <div class="panel">
             <h4 style="color:#10b981;margin-bottom:8px;">Headline</h4>
             <p style="color:#cbd5e1;font-size:.9em;line-height:1.75;margin:0;">
@@ -3735,168 +3809,168 @@ def page_model_performance(user):
             {esc(interp.get('ceiling', ''))}</p>
             </div>""", unsafe_allow_html=True)
 
-            # ── Benchmark table ────────────────────────────────────────
-            st.markdown("#### Versus Established Clinical Practice")
-            brows = [{
-                "Model": mlm.get("name", "ML ensemble"),
-                "AUC": f"{mlm.get('auc', 0):.4f}",
-                "95% CI": (f"{mlm.get('auc_ci_low'):.3f} – {mlm.get('auc_ci_high'):.3f}"
-                           if mlm.get("auc_ci_low") is not None else "—"),
-                "ML advantage": "—", "95% CI (diff)": "—", "Significant": "—",
-            }]
-            for name, d in cbm.get("baselines", {}).items():
-                a = d.get("ml_advantage", {})
-                brows.append({
-                    "Model": name,
-                    "AUC": f"{d.get('auc', 0):.4f}",
-                    "95% CI": (f"{d.get('auc_ci_low'):.3f} – {d.get('auc_ci_high'):.3f}"
-                               if d.get("auc_ci_low") is not None else "—"),
-                    "ML advantage": f"{a.get('difference', 0):+.4f}",
-                    "95% CI (diff)": (f"{a.get('ci_low'):+.4f} – {a.get('ci_high'):+.4f}"
-                                      if a.get("ci_low") is not None else "—"),
-                    "Significant": "Yes" if a.get("significant") else "No",
-                })
-            st.dataframe(pd.DataFrame(brows), hide_index=True, use_container_width=True)
+                # ── Benchmark table ────────────────────────────────────────
+                st.markdown("#### Versus Established Clinical Practice")
+                brows = [{
+                    "Model": mlm.get("name", "ML ensemble"),
+                    "AUC": f"{mlm.get('auc', 0):.4f}",
+                    "95% CI": (f"{mlm.get('auc_ci_low'):.3f} – {mlm.get('auc_ci_high'):.3f}"
+                               if mlm.get("auc_ci_low") is not None else "—"),
+                    "ML advantage": "—", "95% CI (diff)": "—", "Significant": "—",
+                }]
+                for name, d in cbm.get("baselines", {}).items():
+                    a = d.get("ml_advantage", {})
+                    brows.append({
+                        "Model": name,
+                        "AUC": f"{d.get('auc', 0):.4f}",
+                        "95% CI": (f"{d.get('auc_ci_low'):.3f} – {d.get('auc_ci_high'):.3f}"
+                                   if d.get("auc_ci_low") is not None else "—"),
+                        "ML advantage": f"{a.get('difference', 0):+.4f}",
+                        "95% CI (diff)": (f"{a.get('ci_low'):+.4f} – {a.get('ci_high'):+.4f}"
+                                          if a.get("ci_low") is not None else "—"),
+                        "Significant": "Yes" if a.get("significant") else "No",
+                    })
+                st.dataframe(pd.DataFrame(brows), hide_index=True, use_container_width=True)
 
-            fair = cbm.get("baselines", {}).get("Clinical logistic regression", {})
-            if fair:
-                fa = fair.get("ml_advantage", {})
-                st.markdown(
-                    f'<div class="alert-info"><b>The comparison that matters.</b> '
+                fair = cbm.get("baselines", {}).get("Clinical logistic regression", {})
+                if fair:
+                    fa = fair.get("ml_advantage", {})
+                    st.markdown(
+                        f'<div class="alert-info"><b>The comparison that matters.</b> '
                     f'Against conventional logistic regression on the same seven risk '
                     f'factors — identical inputs, identical missing lipids — the ML '
                     f'ensemble gains <b>{fa.get("difference", 0):+.4f} AUC</b> '
                     f'(95% CI {fa.get("ci_low", 0):+.4f} to {fa.get("ci_high", 0):+.4f}). '
                     f'Statistically significant at this sample size, but clinically '
                     f'marginal — which is itself the finding.</div>',
-                    unsafe_allow_html=True)
+                        unsafe_allow_html=True)
 
-            with st.expander("Comparator definitions and caveats"):
-                for name, d in cbm.get("baselines", {}).items():
-                    st.markdown(f"**{name}** — {d.get('note', '')}")
-                for c in interp.get("caveats", []):
-                    st.markdown(f"- {c}")
+                with st.expander("Comparator definitions and caveats"):
+                    for name, d in cbm.get("baselines", {}).items():
+                        st.markdown(f"**{name}** — {d.get('note', '')}")
+                    for c in interp.get("caveats", []):
+                        st.markdown(f"- {c}")
 
-            # ── Benchmark bar chart ────────────────────────────────────
-            names = [r["Model"] for r in brows]
-            vals = [float(r["AUC"]) for r in brows]
-            fig_b, ax_b = plt.subplots(figsize=(9, 3.2), facecolor='none')
-            ax_b.set_facecolor('none')
-            bars_b = ax_b.barh(
-                [n.replace(" (", "\n(") for n in names][::-1], vals[::-1],
-                color=([ucharts.color('risk_low')] + [ucharts.color('reference')] * (len(vals) - 1))[::-1], height=0.6)
-            ax_b.set_xlim(0.5, 0.88)
-            ax_b.set_xlabel("AUC", color=ucharts.color('fg'), fontsize=9)
-            ax_b.tick_params(colors=ucharts.color('fg'), labelsize=8)
-            for sp in ['top', 'right']:   ax_b.spines[sp].set_visible(False)
-            for sp in ['left', 'bottom']: ax_b.spines[sp].set_color(ucharts.color('spine'))
-            for bar in bars_b:
-                ax_b.text(bar.get_width() + 0.004,
-                          bar.get_y() + bar.get_height() / 2,
-                          f"{bar.get_width():.4f}", va='center',
-                          color=ucharts.color('fg'), fontsize=8, fontweight='600')
-            plt.tight_layout()
-            st.pyplot(fig_b, transparent=True)
-            plt.close()
+                # ── Benchmark bar chart ────────────────────────────────────
+                names = [r["Model"] for r in brows]
+                vals = [float(r["AUC"]) for r in brows]
+                fig_b, ax_b = plt.subplots(figsize=(9, 3.2), facecolor='none')
+                ax_b.set_facecolor('none')
+                bars_b = ax_b.barh(
+                    [n.replace(" (", "\n(") for n in names][::-1], vals[::-1],
+                    color=([ucharts.color('risk_low')] + [ucharts.color('reference')] * (len(vals) - 1))[::-1], height=0.6)
+                ax_b.set_xlim(0.5, 0.88)
+                ax_b.set_xlabel("AUC", color=ucharts.color('fg'), fontsize=9)
+                ax_b.tick_params(colors=ucharts.color('fg'), labelsize=8)
+                for sp in ['top', 'right']:   ax_b.spines[sp].set_visible(False)
+                for sp in ['left', 'bottom']: ax_b.spines[sp].set_color(ucharts.color('spine'))
+                for bar in bars_b:
+                    ax_b.text(bar.get_width() + 0.004,
+                              bar.get_y() + bar.get_height() / 2,
+                              f"{bar.get_width():.4f}", va='center',
+                              color=ucharts.color('fg'), fontsize=8, fontweight='600')
+                plt.tight_layout()
+                st.pyplot(fig_b, transparent=True)
+                plt.close()
 
-            # ── Incremental feature value ──────────────────────────────
-            st.markdown("---")
-            st.markdown("#### Incremental Value of Each Clinical Measurement")
-            st.markdown(
-                '<div class="alert-info" style="font-size:.82em;">Feature groups added '
+                # ── Incremental feature value ──────────────────────────────
+                st.markdown("---")
+                st.markdown("#### Incremental Value of Each Clinical Measurement")
+                st.markdown(
+                    '<div class="alert-info" style="font-size:.82em;">Feature groups added '
                 'in the order a clinician acquires them — demographics are free, a BP '
                 'cuff is nearly free, height/weight need a scale, cholesterol and '
                 'glucose need a blood draw. Each delta answers <b>"is the next test '
                 'worth ordering?"</b></div>', unsafe_allow_html=True)
 
-            ladder = bm.get("incremental_value", [])
-            if ladder:
-                st.dataframe(pd.DataFrame([{
-                    "Acquisition Step": r["step"],
-                    "Features": r["n_features"],
-                    "AUC": f"{r['auc']:.4f}",
-                    "95% CI": (f"{r['auc_ci_low']:.3f} – {r['auc_ci_high']:.3f}"
-                               if r.get("auc_ci_low") is not None else "—"),
-                    "Marginal gain": ("—" if r.get("delta_auc") is None
-                                      else f"{r['delta_auc']:+.4f}"),
-                } for r in ladder]), hide_index=True, use_container_width=True)
+                ladder = bm.get("incremental_value", [])
+                if ladder:
+                    st.dataframe(pd.DataFrame([{
+                        "Acquisition Step": r["step"],
+                        "Features": r["n_features"],
+                        "AUC": f"{r['auc']:.4f}",
+                        "95% CI": (f"{r['auc_ci_low']:.3f} – {r['auc_ci_high']:.3f}"
+                                   if r.get("auc_ci_low") is not None else "—"),
+                        "Marginal gain": ("—" if r.get("delta_auc") is None
+                                          else f"{r['delta_auc']:+.4f}"),
+                    } for r in ladder]), hide_index=True, use_container_width=True)
 
-                lx = [r["step"].replace("+ ", "+\n") for r in ladder]
-                ly = [r["auc"] for r in ladder]
-                fig_l, ax_l = plt.subplots(figsize=(9, 3.4), facecolor='none')
-                ax_l.set_facecolor('none')
-                ax_l.plot(range(len(ly)), ly, marker='o', color=ucharts.color('risk_low'), lw=2.2,
-                          markersize=7)
-                for i, r in enumerate(ladder):
-                    if r.get("delta_auc") is not None:
-                        big = r["delta_auc"] >= 0.01
-                        ax_l.annotate(f"{r['delta_auc']:+.4f}", (i, ly[i]),
-                                      textcoords="offset points", xytext=(0, 11),
-                                      ha='center', fontsize=8.5, fontweight='700',
-                                      color=ucharts.color('risk_high') if big else ucharts.color('reference'))
-                ax_l.set_xticks(range(len(lx)))
-                ax_l.set_xticklabels(lx, color=ucharts.color('fg'), fontsize=7.5)
-                ax_l.set_ylabel("AUC", color=ucharts.color('fg'), fontsize=9)
-                ax_l.set_ylim(min(ly) - 0.03, max(ly) + 0.035)
-                ax_l.tick_params(colors=ucharts.color('fg'), labelsize=8)
-                ax_l.grid(True, axis='y', color=ucharts.color('surface'), ls='--', lw=0.5, alpha=0.6)
-                for sp in ['top', 'right']:   ax_l.spines[sp].set_visible(False)
-                for sp in ['left', 'bottom']: ax_l.spines[sp].set_color(ucharts.color('spine'))
-                plt.tight_layout()
-                st.pyplot(fig_l, transparent=True)
-                plt.close()
+                    lx = [r["step"].replace("+ ", "+\n") for r in ladder]
+                    ly = [r["auc"] for r in ladder]
+                    fig_l, ax_l = plt.subplots(figsize=(9, 3.4), facecolor='none')
+                    ax_l.set_facecolor('none')
+                    ax_l.plot(range(len(ly)), ly, marker='o', color=ucharts.color('risk_low'), lw=2.2,
+                              markersize=7)
+                    for i, r in enumerate(ladder):
+                        if r.get("delta_auc") is not None:
+                            big = r["delta_auc"] >= 0.01
+                            ax_l.annotate(f"{r['delta_auc']:+.4f}", (i, ly[i]),
+                                          textcoords="offset points", xytext=(0, 11),
+                                          ha='center', fontsize=8.5, fontweight='700',
+                                          color=ucharts.color('risk_high') if big else ucharts.color('reference'))
+                    ax_l.set_xticks(range(len(lx)))
+                    ax_l.set_xticklabels(lx, color=ucharts.color('fg'), fontsize=7.5)
+                    ax_l.set_ylabel("AUC", color=ucharts.color('fg'), fontsize=9)
+                    ax_l.set_ylim(min(ly) - 0.03, max(ly) + 0.035)
+                    ax_l.tick_params(colors=ucharts.color('fg'), labelsize=8)
+                    ax_l.grid(True, axis='y', color=ucharts.color('surface'), ls='--', lw=0.5, alpha=0.6)
+                    for sp in ['top', 'right']:   ax_l.spines[sp].set_visible(False)
+                    for sp in ['left', 'bottom']: ax_l.spines[sp].set_color(ucharts.color('spine'))
+                    plt.tight_layout()
+                    st.pyplot(fig_l, transparent=True)
+                    plt.close()
 
-            # ── Ceiling evidence ───────────────────────────────────────
-            st.markdown("---")
-            st.markdown("#### Ceiling Evidence — Why More Modelling Will Not Help")
-            cc1, cc2 = st.columns(2)
-            with cc1:
-                st.markdown("**Hyperparameter search**")
-                hp = bm.get("hyperparameter_search", {})
-                if hp.get("gain") is not None:
-                    st.dataframe(pd.DataFrame([
-                        {"Metric": "Shipped hyperparameters", "AUC": f"{hp['baseline_auc']:.4f}"},
-                        {"Metric": f"Best of {hp['n_trials']} random trials", "AUC": f"{hp['tuned_auc']:.4f}"},
-                        {"Metric": "Gain", "AUC": f"{hp['gain']:+.4f}"},
-                        {"Metric": "Search time", "AUC": f"{hp['search_seconds']:.0f}s"},
-                    ]), hide_index=True, use_container_width=True)
-                    st.caption(hp.get("conclusion", ""))
-                else:
-                    st.info("Search not yet run — `python -c \"import train_models as t; t.tune()\"`")
-            with cc2:
-                st.markdown("**Interaction terms**")
-                it = bm.get("interaction_test", {})
-                if it:
-                    st.dataframe(pd.DataFrame([
-                        {"Model family": fam.capitalize(),
-                         "Base": f"{it[fam]['base']:.4f}",
-                         "+ Interactions": f"{it[fam]['with_interactions']:.4f}",
-                         "Delta": f"{it[fam]['delta']:+.4f}"}
-                        for fam in ("tree", "linear") if fam in it
-                    ]), hide_index=True, use_container_width=True)
-                    st.caption("Trees already represent interactions implicitly, so the "
+                # ── Ceiling evidence ───────────────────────────────────────
+                st.markdown("---")
+                st.markdown("#### Ceiling Evidence — Why More Modelling Will Not Help")
+                cc1, cc2 = st.columns(2)
+                with cc1:
+                    st.markdown("**Hyperparameter search**")
+                    hp = bm.get("hyperparameter_search", {})
+                    if hp.get("gain") is not None:
+                        st.dataframe(pd.DataFrame([
+                            {"Metric": "Shipped hyperparameters", "AUC": f"{hp['baseline_auc']:.4f}"},
+                            {"Metric": f"Best of {hp['n_trials']} random trials", "AUC": f"{hp['tuned_auc']:.4f}"},
+                            {"Metric": "Gain", "AUC": f"{hp['gain']:+.4f}"},
+                            {"Metric": "Search time", "AUC": f"{hp['search_seconds']:.0f}s"},
+                        ]), hide_index=True, use_container_width=True)
+                        st.caption(hp.get("conclusion", ""))
+                    else:
+                        st.info("Search not yet run — `python -c \"import train_models as t; t.tune()\"`")
+                with cc2:
+                    st.markdown("**Interaction terms**")
+                    it = bm.get("interaction_test", {})
+                    if it:
+                        st.dataframe(pd.DataFrame([
+                            {"Model family": fam.capitalize(),
+                             "Base": f"{it[fam]['base']:.4f}",
+                             "+ Interactions": f"{it[fam]['with_interactions']:.4f}",
+                             "Delta": f"{it[fam]['delta']:+.4f}"}
+                            for fam in ("tree", "linear") if fam in it
+                        ]), hide_index=True, use_container_width=True)
+                        st.caption("Trees already represent interactions implicitly, so the "
                                "null result there indicates the functional form is "
                                "saturated. The linear gain merely confirms the terms are "
                                "real; it does not raise the ceiling.")
 
-            # ── Data roadmap ───────────────────────────────────────────
-            st.markdown("---")
-            st.markdown("#### What Would Actually Improve Performance")
-            wh = interp.get("what_would_help", [])
-            if wh:
-                st.markdown(
-                    '<div class="alert-warning" style="font-size:.85em;">'
+                # ── Data roadmap ───────────────────────────────────────────
+                st.markdown("---")
+                st.markdown("#### What Would Actually Improve Performance")
+                wh = interp.get("what_would_help", [])
+                if wh:
+                    st.markdown(
+                        '<div class="alert-warning" style="font-size:.85em;">'
                     'Performance is bounded by <b>available features</b>, not by the '
                     'algorithm. In descending expected value:</div>',
-                    unsafe_allow_html=True)
-                for i, item in enumerate(wh, 1):
-                    st.markdown(f"**{i}.** {item}")
+                        unsafe_allow_html=True)
+                    for i, item in enumerate(wh, 1):
+                        st.markdown(f"**{i}.** {item}")
 
-            st.download_button(
-                "Export Benchmark Report (JSON)",
-                json.dumps(bm, indent=2).encode(),
-                "clinical_benchmark_report.json", "application/json",
-                use_container_width=True)
+                st.download_button(
+                    "Export Benchmark Report (JSON)",
+                    json.dumps(bm, indent=2).encode(),
+                    "clinical_benchmark_report.json", "application/json",
+                    use_container_width=True)
 
 
 # ══════════════════════════════════════════════════════════════════

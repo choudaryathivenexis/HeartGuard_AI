@@ -2112,3 +2112,132 @@ Phase 10: the admin and management pages (16 remaining KPI call sites, the typed
 confirmation pattern for destructive actions, the Activity Logs danger zone), the
 accessibility audit against §8, responsive verification at 1440/1280/1024/768, the print
 stylesheet, and the `use_container_width` → `width='stretch'` sweep.
+
+---
+
+# RUN 13 — Frontend redesign, Phase 9: the Model Performance IA (2026-07-27)
+
+Eleven horizontal tabs became four groups. §7.5 calls this "the single largest usability
+gain available on this page" and requires **zero content changes** — pure information
+architecture.
+
+```
+Performance      Metric Comparison · Confusion Matrices · Detailed Report · ROC & PR Curves
+Validation       K-Fold CV · Subgroup Performance & Fairness
+Clinical         Threshold & Clinical Utility · Clinical Benchmark & Feature Value
+Explainability   Feature Importance · SHAP · Model Info
+```
+
+## 13.1 — It is also a 7× performance fix
+
+`st.tabs` renders **every** tab body on every run. All eleven were executing on each
+page load. Measured warm, in the same process:
+
+```
+before   all eleven tabs            55.3s
+after    Performance (the default)   7.8s
+         Validation                  8.0s
+         Clinical                    9.1s
+         Explainability             27.6s   (SHAP is genuinely expensive)
+```
+
+This is why each body sits behind `if label in _slot:` rather than merely being handed a
+different container. A container swap would have produced the same navigation with none
+of the saving — the bodies would still all run.
+
+My first measurement of this was wrong and nearly hid the win. I timed the page at 24.5s
+before and 23.0s after and concluded the restructure had barely helped. Both numbers came
+from a process where AppTest had already rendered the page once, so the caches were partly
+warm and the comparison was meaningless. Timing each variant in a cleanly warmed process
+showed 55.3s → 7.8s.
+
+## 13.2 — How a 2,000-line re-indent was made safe
+
+Moving eleven bodies under a guard means re-indenting roughly 2,000 lines, and many of
+them sit inside triple-quoted f-strings. Indenting a *continuation* line inside one of
+those changes the string's contents — and in markdown, four extra leading spaces silently
+turn a paragraph into a code block. That is a corruption no test of the rendered page
+would reliably catch.
+
+So the transform was done with `ast` rather than a regex: every line that falls inside a
+multi-line string literal is protected from indentation, because only the AST can
+identify those reliably.
+
+**The verification is the part worth keeping.** `tests/test_performance_ia.py` parses the
+pre-restructure snapshot and the current module, extracts every string literal from both,
+and classifies any literal that is no longer present:
+
+- **corrupted** — the same text exists but its indentation changed. Detected by matching
+  on the dedented form. **0 of 2,978.**
+- **deleted** — genuinely gone. 16, all located by *source line range* inside the two
+  blocks Phase 9 deliberately replaced.
+
+Locating them by line range rather than by keyword matters: an f-string splits into one
+AST node per gap between placeholders, so fragments like `</b> &nbsp;|&nbsp;` contain
+none of the words a keyword list would search for. My first version of that check
+reported all 16 intentional deletions as failures — a test that cannot tell intent from
+accident.
+
+## 13.3 — The bootstrap CIs, and what they say
+
+§7.5 asked for the intervals to be rendered. They have been computed and stored since
+Run 4 and displayed nowhere, so the table ranked five models by AUC and starred the
+leader while:
+
+```
+Random Forest                  0.8000  [0.7925, 0.8072]
+XGBoost                        0.7999  [0.7922, 0.8070]
+Decision Tree                  0.7933  [0.7853, 0.8005]
+Logistic Regression            0.7920  [0.7841, 0.7987]
+Support Vector Machine (SVM)   0.7918  [0.7839, 0.7985]
+```
+
+A gap of **0.0001** between first and second, and every interval overlapping the
+leader's. The star was presenting noise as a result.
+
+There is now an `AUC 95% CI` column and, above the table, a sentence that is **computed,
+not written**: it reports the actual overlap and currently reads *"every model's interval
+overlaps Random Forest's [0.7925–0.8072], so the ranking is not evidence that any one of
+them is better than another."* If a future retrain genuinely separates two models, that
+sentence changes to say so. A caveat that is true regardless of the data is one readers
+learn to skip.
+
+## 13.4 — Two things removed from the headline
+
+**The trophy banner.** A gold-medal emoji beside a leader whose interval overlaps every
+other model's is a celebration of noise.
+
+**Accuracy as the largest number on the page.** §3.10 forbids it as a headline, and at
+this dataset's near-balanced prevalence 0.70 accuracy tells a reader almost nothing. The
+headline strip now carries the leading model, AUC **with its interval**, and sensitivity
+at the operating point — the metric a screening tool is actually chosen on. Accuracy
+remains in the table.
+
+## 13.5 — Phase 9 gate
+
+```
+27-path AppTest          27/27 routed, 0 exceptions
+py_compile               clean on 15 modules
+pyflakes                 no new warnings vs baseline
+test_tokens              0 failures   (63 assertions)
+test_brand               0 failures   (60)
+test_rail                0 failures   (71)
+test_components          0 failures   (98)
+test_login               0 failures   (68)
+test_diagnosis           0 failures   (76)
+test_charts              0 failures   (78)
+test_performance_ia      0 failures   (40)
+string literals          2,978 checked · 0 corrupted · 16 deliberately removed
+tab bars                 max 4 items (was 11)
+warm render, default     7.8s (was 55.3s)
+screenshots              SUBSTITUTED — see 9.0
+```
+
+## 13.6 — Carried forward
+
+Phase 10 only: the admin and management pages (16 remaining KPI call sites, §7.6's
+typed-confirmation pattern for destructive actions, the Activity Logs danger zone as a
+hairline `danger` panel rather than a red fill), the §8 accessibility audit including
+protanopia/deuteranopia simulation of the four band colours, responsive verification at
+1440/1280/1024/768, the print stylesheet, and the `use_container_width` →
+`width='stretch'` sweep.
