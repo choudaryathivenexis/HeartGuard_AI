@@ -17,6 +17,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
 import feature_engineering as fe
+from ui import charts as ucharts
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODELS_DIR = os.path.join(BASE_DIR, "models")
@@ -252,13 +253,21 @@ def explain_patient(model, feats_scaled, feature_names, background=None):
 
 
 def waterfall_figure(shap_row, base_value, feature_names, raw_values,
-                     final_prob, top_n=10, unit="mg/dL"):
+                     final_prob, top_n=10, unit="mg/dL", theme=None):
     """
     Per-patient SHAP waterfall: which of THIS patient's values drove THIS score.
 
     Contributions are in log-odds (the model's native output space); the probability is
     shown separately rather than implying the bars sum to it, which would be wrong.
+
+    `theme` exists because this one figure has two destinations with opposite
+    requirements. On screen it must follow the viewer, light or dark. Inside the PDF it
+    is printed on white A4 and must ALWAYS be light — a dark-mode viewer exporting a
+    report would otherwise get near-white ink on a white page, an invisible chart in a
+    file they then hand to someone else. The PDF builder passes theme='light'; the
+    screen passes nothing.
     """
+    p = ucharts.palette(theme)
     order = np.argsort(np.abs(shap_row))[::-1][:top_n]
     labels, vals, contrib = [], [], []
     for i in order:
@@ -281,11 +290,11 @@ def waterfall_figure(shap_row, base_value, feature_names, raw_values,
         contrib.append(float(shap_row[i]))
 
     fig, ax = plt.subplots(figsize=(7.6, max(3.2, 0.42 * len(labels) + 1.1)),
-                           facecolor='#0d1117')
-    ax.set_facecolor('#161b22')
-    colors = ['#ef4444' if c > 0 else '#3b82f6' for c in contrib]
+                           facecolor='none')
+    ax.set_facecolor('none')
+    colors = [p['risk_high'] if c > 0 else p['primary'] for c in contrib]
     bars = ax.barh(labels[::-1], contrib[::-1], color=colors[::-1], height=0.62)
-    ax.axvline(0, color='#94a3b8', lw=1.1)
+    ax.axvline(0, color=p['fg_muted'], lw=1.1)
     span = max(abs(min(contrib)), abs(max(contrib))) or 1.0
     for bar, c in zip(bars, contrib[::-1]):
         off = span * 0.035
@@ -293,18 +302,23 @@ def waterfall_figure(shap_row, base_value, feature_names, raw_values,
                 bar.get_y() + bar.get_height() / 2,
                 f"{c:+.3f}", va='center',
                 ha='left' if c > 0 else 'right',
-                color='#c9d1d9', fontsize=7.6, fontweight='700')
+                color=p['fg'], fontsize=7.6, fontweight='700')
     ax.set_xlim(-span * 1.38, span * 1.38)
-    ax.set_xlabel("Contribution to risk (log-odds)  —  red increases, blue decreases",
-                  color='#c9d1d9', fontsize=8.4)
+    # The axis label used to say "red increases, blue decreases". There is no blue in
+    # the palette any more, and naming colours in a label is the wrong way to encode
+    # direction regardless — it is unreadable to anyone who cannot separate the two.
+    # The sign on every bar already carries it.
+    ax.set_xlabel("Contribution to risk (log-odds) — positive raises, negative lowers",
+                  color=p['fg_muted'], fontsize=8.4)
     ax.set_title(f"Why this patient scored {final_prob:.1%}",
-                 color='#c9d1d9', fontsize=10, fontweight='700', pad=10)
-    ax.tick_params(colors='#c9d1d9', labelsize=8)
+                 color=p['fg'], fontsize=10, fontweight='700', pad=10)
+    ax.tick_params(colors=p['fg_muted'], labelsize=8)
     for sp in ['top', 'right']:
         ax.spines[sp].set_visible(False)
     for sp in ['left', 'bottom']:
-        ax.spines[sp].set_color('#30363d')
-    ax.grid(True, axis='x', color='#21262d', ls='--', lw=0.5, alpha=0.6)
+        ax.spines[sp].set_color(p['spine'])
+    ax.grid(True, axis='x', color=p['grid'], ls='--', lw=0.5, alpha=0.9)
+    ax.set_axisbelow(True)
     plt.tight_layout()
     return fig
 
@@ -460,29 +474,35 @@ def sensitivity_curve(models, scaler, weights, base_inputs, field, values):
 # PDF report
 # ════════════════════════════════════════════════════════════════════════
 def _pdf_text_page(pdf, title, lines, footer=None):
+    # ALWAYS the light palette, never the viewer's. This page is printed on white A4:
+    # a dark-mode user exporting a report would otherwise get near-white ink on a white
+    # background — an unreadable file, produced silently, that they then hand to
+    # someone else. `ucharts.color()` follows the viewer and is wrong here by
+    # construction; `palette('light')` is pinned.
+    p = ucharts.palette('light')
     fig = plt.figure(figsize=(8.27, 11.69), facecolor='white')   # A4 portrait
     fig.text(0.08, 0.955, "HeartGuard AI", fontsize=19, fontweight='bold',
-             color='#b91c1c')
-    fig.text(0.08, 0.932, title, fontsize=11.5, color='#334155')
-    fig.text(0.08, 0.921, "_" * 92, fontsize=8, color='#cbd5e1')
+             color=p['primary'])
+    fig.text(0.08, 0.932, title, fontsize=11.5, color=p['fg_muted'])
+    fig.text(0.08, 0.921, "_" * 92, fontsize=8, color=p['spine'])
     y = 0.885
     for line in lines:
         if line.startswith("## "):
             y -= 0.012
             fig.text(0.08, y, line[3:], fontsize=10.5, fontweight='bold',
-                     color='#0f172a')
+                     color=p['ink'])
             y -= 0.019
         elif line == "---":
-            fig.text(0.08, y + 0.004, "_" * 92, fontsize=8, color='#e2e8f0')
+            fig.text(0.08, y + 0.004, "_" * 92, fontsize=8, color=p['grid'])
             y -= 0.016
         else:
-            fig.text(0.08, y, line, fontsize=8.8, color='#1e293b',
+            fig.text(0.08, y, line, fontsize=8.8, color=p['fg'],
                      family='DejaVu Sans')
             y -= 0.0163
         if y < 0.06:
             break
     if footer:
-        fig.text(0.08, 0.032, footer, fontsize=7, color='#64748b')
+        fig.text(0.08, 0.032, footer, fontsize=7, color=p['fg_subtle'])
     pdf.savefig(fig, facecolor='white')
     plt.close(fig)
 
@@ -561,15 +581,22 @@ def build_pdf_report(meta, indicators, prediction, operating, reliability,
                     "Final determination must be made by a licensed professional."))
 
         if waterfall_fig is not None:
+            # Callers should build this with waterfall_figure(theme='light'), and
+            # app.py does. This repaint stays as a safety net for any caller that
+            # hands over a figure built for the screen: on white A4, dark-theme ink is
+            # invisible, and the failure is silent — the PDF opens, the chart is blank.
+            # It cannot recover the BAR colours, which is why the theme argument is the
+            # real fix and this is only the backstop.
+            p = ucharts.palette('light')
             waterfall_fig.patch.set_facecolor('white')
             for ax in waterfall_fig.get_axes():
                 ax.set_facecolor('white')
-                ax.title.set_color('#0f172a')
-                ax.xaxis.label.set_color('#334155')
+                ax.title.set_color(p['ink'])
+                ax.xaxis.label.set_color(p['fg_muted'])
                 for t in ax.get_xticklabels() + ax.get_yticklabels():
-                    t.set_color('#334155')
+                    t.set_color(p['fg_muted'])
                 for txt in ax.texts:
-                    txt.set_color('#334155')
+                    txt.set_color(p['fg'])
             pdf.savefig(waterfall_fig, facecolor='white', bbox_inches='tight')
 
         if counterfactuals:

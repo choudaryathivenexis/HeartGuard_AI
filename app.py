@@ -221,15 +221,15 @@ def classify_risk_band(prob, model_name="Ensemble Voting", active_threshold=None
     """Return (band_label, colour, recommended action) for a probability."""
     low_max, border_max, inter_max = get_risk_bands(model_name, active_threshold)
     if prob < low_max:
-        return ("LOW RISK", "#10b981",
+        return ("LOW RISK", ucharts.color('risk_low'),
                 "No significant cardiovascular risk pattern detected. Routine review.")
     if prob < border_max:
-        return ("BORDERLINE", "#f59e0b",
+        return ("BORDERLINE", ucharts.color('risk_borderline'),
                 "Below the screening action threshold. Lifestyle advice and re-assessment advised.")
     if prob < inter_max:
-        return ("INTERMEDIATE RISK", "#f97316",
+        return ("INTERMEDIATE RISK", ucharts.color('risk_intermediate'),
                 "Above the screening action threshold. Further cardiovascular testing indicated.")
-    return ("HIGH RISK", "#ef4444",
+    return ("HIGH RISK", ucharts.color('risk_high'),
             "Strong cardiovascular risk pattern. Immediate clinical review advised.")
 
 
@@ -253,13 +253,10 @@ MODEL_SHORT_NAMES = {
     "Random Forest": "RF",
     "XGBoost": "XGB",
 }
-MODEL_COLORS = {
-    "Logistic Regression": "#ef4444",
-    "Support Vector Machine (SVM)": "#3b82f6",
-    "Decision Tree": "#f59e0b",
-    "Random Forest": "#10b981",
-    "XGBoost": "#a855f7",
-}
+# Model colours live in the token module as T.SERIES and are reached through
+# ucharts.series_color(name). A dict here would be evaluated at import time, before any
+# script run, freezing one theme; and it would hand models RISK hues, which 3.10
+# reserves for clinical meaning.
 
 # ══════════════════════════════════════════════════════════════════
 # PAGE CONFIG
@@ -1167,8 +1164,11 @@ def _pdf_report(res, user):
         wf = None
         if res.get("shap") is not None:
             vals, base = res["shap"]
+            # theme='light': this copy is printed on white A4. Without the pin, a
+            # dark-mode user exports a report whose chart is near-white on white.
             wf = cu.waterfall_figure(vals, base, _feature_names(),
-                                     res["features"], res["final_prob"])
+                                     res["features"], res["final_prob"],
+                                     theme="light")
         pdf = cu.build_pdf_report(
             meta={"patient_id": res["p_id"], "patient_name": res["p_name"],
                   "prepared_by": f"{user['fullname']} ({user['role']})",
@@ -1537,36 +1537,36 @@ def page_admin_analytics(user):
             pdf = pd.DataFrame(all_preds)
             pdf['date'] = pd.to_datetime(pdf['timestamp']).dt.date
 
-            fig, axes = plt.subplots(1, 2, figsize=(12, 4), facecolor='#060d1a')
+            fig, axes = plt.subplots(1, 2, figsize=(12, 4), facecolor='none')
             ax = axes[0]
-            ax.set_facecolor('#0d1f35')
+            ax.set_facecolor('none')
             vals = [risk_c, safe_c]
-            clrs = ['#ef4444', '#10b981']
+            clrs = [ucharts.color('risk_high'), ucharts.color('risk_low')]
             wedges, _, autotexts = ax.pie(vals, colors=clrs, autopct='%1.1f%%',
                                           startangle=90, pctdistance=0.75,
                                           wedgeprops=dict(width=0.5))
             for at in autotexts:
                 at.set_color('white')
                 at.set_fontsize(9)
-            ax.set_title('Risk Distribution', color='white', pad=12)
-            patches = [mpatches.Patch(color='#ef4444', label='High Risk'),
-                       mpatches.Patch(color='#10b981', label='Low Risk')]
-            ax.legend(handles=patches, loc='lower center', facecolor='#0d1f35',
-                      labelcolor='white', framealpha=0.5, fontsize=8)
+            ax.set_title('Risk Distribution', color=ucharts.color('fg'), pad=12)
+            patches = [mpatches.Patch(color=ucharts.color('risk_high'), label='High Risk'),
+                       mpatches.Patch(color=ucharts.color('risk_low'), label='Low Risk')]
+            ax.legend(handles=patches, loc='lower center', facecolor=ucharts.color('surface'),
+                      labelcolor=ucharts.color('fg'), framealpha=0.5, fontsize=8)
 
             ax2 = axes[1]
-            ax2.set_facecolor('#0d1f35')
+            ax2.set_facecolor('none')
             mu = pdf['model_used'].value_counts()
-            bars = ax2.barh(mu.index, mu.values, color='#3b82f6', height=0.5)
-            ax2.set_title('Model Usage', color='white', pad=12)
-            ax2.tick_params(colors='white', labelsize=8)
+            bars = ax2.barh(mu.index, mu.values, color=ucharts.color('primary'), height=0.5)
+            ax2.set_title('Model Usage', color=ucharts.color('fg'), pad=12)
+            ax2.tick_params(colors=ucharts.color('axis'), labelsize=8)
             for sp in ax2.spines.values():
-                sp.set_color('#1e3a5f')
+                sp.set_color(ucharts.color('spine'))
             for bar in bars:
                 ax2.text(bar.get_width() + 0.3, bar.get_y() + bar.get_height() / 2,
-                         str(int(bar.get_width())), va='center', color='white', fontsize=8)
+                         str(int(bar.get_width())), va='center', color=ucharts.color('fg'), fontsize=8)
             plt.tight_layout()
-            st.pyplot(fig)
+            st.pyplot(fig, transparent=True)
             plt.close()
         else:
             st.info("No prediction data yet.")
@@ -1583,26 +1583,26 @@ def page_admin_analytics(user):
                              "Recall": f"{d.get('recall', 0):.3f}"})
             st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
 
-            fig2, ax3 = plt.subplots(figsize=(9, 3.5), facecolor='#060d1a')
-            ax3.set_facecolor('#0d1f35')
+            fig2, ax3 = plt.subplots(figsize=(9, 3.5), facecolor='none')
+            ax3.set_facecolor('none')
             names = [r['Model'] for r in rows]
             accs = [float(r['Accuracy'].strip('%')) / 100 for r in rows]
-            colors = ['#ef4444', '#3b82f6', '#f59e0b', '#10b981', '#a855f7']
-            bars = ax3.bar(names, accs, color=colors[:len(names)], width=0.45)
+            bars = ax3.bar(names, accs,
+                           color=[ucharts.series_color(n) for n in names], width=0.45)
             ax3.set_ylim(0, 1.05)
-            ax3.set_title("Model Accuracy Comparison", color='white', pad=10)
-            ax3.tick_params(colors='white', labelsize=7)
+            ax3.set_title("Model Accuracy Comparison", color=ucharts.color('fg'), pad=10)
+            ax3.tick_params(colors=ucharts.color('axis'), labelsize=7)
             for sp in ax3.spines.values():
-                sp.set_color('#1e3a5f')
+                sp.set_color(ucharts.color('spine'))
             ax3.spines['top'].set_visible(False)
             ax3.spines['right'].set_visible(False)
             for bar in bars:
                 ax3.annotate(f"{bar.get_height():.1%}",
                              xy=(bar.get_x() + bar.get_width() / 2, bar.get_height()),
                              xytext=(0, 4), textcoords="offset points",
-                             ha='center', color='white', fontsize=8)
+                             ha='center', color=ucharts.color('fg'), fontsize=8)
             plt.tight_layout()
-            st.pyplot(fig2)
+            st.pyplot(fig2, transparent=True)
             plt.close()
         else:
             st.info("No model results found. Ask SuperAdmin to train models.")
@@ -1728,28 +1728,28 @@ def page_training(user):
             display['Recall'] = display['Recall'].apply(lambda x: f"{x:.4f}")
             st.dataframe(display, hide_index=True, use_container_width=True)
 
-            fig, ax = plt.subplots(figsize=(11, 4), facecolor='#060d1a')
-            ax.set_facecolor('#0d1f35')
+            fig, ax = plt.subplots(figsize=(11, 4), facecolor='none')
+            ax.set_facecolor('none')
             x = np.arange(len(rows))
             w = 0.18
-            metrics = [('Accuracy', '#ef4444'), ('AUC', '#3b82f6'),
-                       ('F1', '#10b981'), ('Precision', '#f59e0b'), ('Recall', '#a855f7')]
+            _mc = ucharts.categorical(5)
+            metrics = list(zip(['Accuracy', 'AUC', 'F1', 'Precision', 'Recall'], _mc))
             for i, (met, col) in enumerate(metrics):
                 vals = [results[r['Model']][met.lower()] for r in rows]
                 ax.bar(x + i * w, vals, w, label=met, color=col, alpha=0.9)
             ax.set_xticks(x + w * 2)
             ax.set_xticklabels([r['Model'].replace("(", "\n(") for r in rows],
-                               color='white', fontsize=7)
+                               color=ucharts.color('fg'), fontsize=7)
             ax.set_ylim(0, 1.1)
-            ax.tick_params(colors='white')
-            ax.legend(facecolor='#0d1f35', labelcolor='white', fontsize=8, loc='lower right')
-            ax.set_title("Model Metric Comparison", color='white', pad=10)
+            ax.tick_params(colors=ucharts.color('axis'))
+            ax.legend(facecolor=ucharts.color('surface'), labelcolor=ucharts.color('fg'), fontsize=8, loc='lower right')
+            ax.set_title("Model Metric Comparison", color=ucharts.color('fg'), pad=10)
             for sp in ax.spines.values():
-                sp.set_color('#1e3a5f')
+                sp.set_color(ucharts.color('spine'))
             ax.spines['top'].set_visible(False)
             ax.spines['right'].set_visible(False)
             plt.tight_layout()
-            st.pyplot(fig)
+            st.pyplot(fig, transparent=True)
             plt.close()
         else:
             st.info("No results found. Train models first.")
@@ -1833,10 +1833,8 @@ def page_model_performance(user):
     # FIXED (BUG-19): short names and colours keyed by model name, not list position.
     # Previously these were zipped positionally against results.json's keys, so a
     # partial training run silently labelled every chart with the wrong model's name.
-    _palette    = ['#ef4444', '#3b82f6', '#f59e0b', '#10b981', '#a855f7']
     short_names = [MODEL_SHORT_NAMES.get(m, m[:3].upper()) for m in model_names]
-    colors_bar  = [MODEL_COLORS.get(m, _palette[i % len(_palette)])
-                   for i, m in enumerate(model_names)]
+    colors_bar  = [ucharts.series_color(m) for m in model_names]
     accs  = [results[m]['accuracy']  for m in model_names]
     aucs  = [results[m]['auc']       for m in model_names]
     f1s   = [results[m]['f1']        for m in model_names]
@@ -1937,17 +1935,15 @@ def page_model_performance(user):
         col_l, col_r = st.columns(2)
         with col_l:
             st.markdown("**Accuracy / AUC / F1 per Model**")
-            fig, ax = plt.subplots(figsize=(6, 4), facecolor='#0d1117')
-            ax.set_facecolor('#161b22')
+            fig, ax = plt.subplots(figsize=(6, 4), facecolor='none')
+            ax.set_facecolor('none')
             x = range(len(model_names))
             w = 0.18
-            metrics_grp = [
-                (accs,  '#3b82f6', 'Accuracy'),
-                (aucs,  '#a855f7', 'AUC'),
-                (f1s,   '#10b981', 'F1'),
-                (precs, '#f59e0b', 'Precision'),
-                (recs,  '#ef4444', 'Recall'),
-            ]
+            # Categorical, not clinical: these are five metrics, and 3.10 reserves
+            # the risk hues for clinical meaning.
+            _mg = ucharts.categorical(5)
+            metrics_grp = list(zip([accs, aucs, f1s, precs, recs], _mg,
+                                   ['Accuracy', 'AUC', 'F1', 'Precision', 'Recall']))
             offsets = [-2*w, -w, 0, w, 2*w]
             for (vals, col, lbl), off in zip(metrics_grp, offsets):
                 bars = ax.bar([i + off for i in x], vals,
@@ -1956,16 +1952,16 @@ def page_model_performance(user):
                     ax.annotate(f"{bar.get_height():.2f}",
                                 xy=(bar.get_x()+bar.get_width()/2, bar.get_height()),
                                 xytext=(0, 2), textcoords="offset points",
-                                ha='center', color='#c9d1d9', fontsize=5.5, fontweight='600')
+                                ha='center', color=ucharts.color('fg'), fontsize=5.5, fontweight='600')
             ax.set_xticks(list(x))
-            ax.set_xticklabels(short_names, color='#c9d1d9', fontsize=9)
+            ax.set_xticklabels(short_names, color=ucharts.color('fg'), fontsize=9)
             ax.set_ylim(0, 1.14)
-            ax.tick_params(colors='#c9d1d9', labelsize=8)
-            ax.legend(facecolor='#21262d', labelcolor='#c9d1d9', fontsize=7,
+            ax.tick_params(colors=ucharts.color('fg'), labelsize=8)
+            ax.legend(facecolor=ucharts.color('surface'), labelcolor=ucharts.color('fg'), fontsize=7,
                       loc='upper right', ncol=2)
             for sp in ['top', 'right']:   ax.spines[sp].set_visible(False)
-            for sp in ['left', 'bottom']: ax.spines[sp].set_color('#30363d')
-            ax.grid(True, axis='y', color='#21262d', linestyle='--',
+            for sp in ['left', 'bottom']: ax.spines[sp].set_color(ucharts.color('spine'))
+            ax.grid(True, axis='y', color=ucharts.color('surface'), linestyle='--',
                     linewidth=0.5, alpha=0.6)
             plt.tight_layout()
             st.pyplot(fig, transparent=True)
@@ -1974,18 +1970,18 @@ def page_model_performance(user):
         with col_r:
             st.markdown("**AUC Ranking**")
             si = sorted(range(len(aucs)), key=lambda i: aucs[i], reverse=True)
-            fig2, ax2 = plt.subplots(figsize=(6, 4), facecolor='#0d1117')
-            ax2.set_facecolor('#161b22')
+            fig2, ax2 = plt.subplots(figsize=(6, 4), facecolor='none')
+            ax2.set_facecolor('none')
             bar_h = ax2.barh([model_names[i] for i in si], [aucs[i] for i in si],
                              color=[colors_bar[i] for i in si], height=0.5)
             ax2.set_xlim(0, 1.05)
-            ax2.tick_params(colors='#c9d1d9', labelsize=8)
+            ax2.tick_params(colors=ucharts.color('fg'), labelsize=8)
             for sp in ['top', 'right']:   ax2.spines[sp].set_visible(False)
-            for sp in ['left', 'bottom']: ax2.spines[sp].set_color('#30363d')
+            for sp in ['left', 'bottom']: ax2.spines[sp].set_color(ucharts.color('spine'))
             for bar in bar_h:
                 ax2.text(bar.get_width() + 0.01, bar.get_y() + bar.get_height()/2,
                          f"{bar.get_width():.4f}", va='center',
-                         color='#c9d1d9', fontsize=8, fontweight='600')
+                         color=ucharts.color('fg'), fontsize=8, fontweight='600')
             plt.tight_layout()
             st.pyplot(fig2, transparent=True)
             plt.close()
@@ -2003,8 +1999,8 @@ def page_model_performance(user):
 
         fig_r, ax_r = plt.subplots(figsize=(6, 5),
                                    subplot_kw=dict(polar=True),
-                                   facecolor='#0d1117')
-        ax_r.set_facecolor('#161b22')
+                                   facecolor='none')
+        ax_r.set_facecolor('none')
         for i, (mn, rv) in enumerate(zip(model_names, radar_vals_all)):
             vals = rv + rv[:1]
             ax_r.plot(angles, vals, color=colors_bar[i],
@@ -2012,14 +2008,14 @@ def page_model_performance(user):
             ax_r.fill(angles, vals, color=colors_bar[i], alpha=0.10)
 
         ax_r.set_thetagrids(np.degrees(angles[:-1]), radar_metrics,
-                            color='#c9d1d9', fontsize=9)
+                            color=ucharts.color('fg'), fontsize=9)
         ax_r.set_ylim(0, 1)
         ax_r.set_yticks([0.2, 0.4, 0.6, 0.8, 1.0])
         ax_r.set_yticklabels(['0.2','0.4','0.6','0.8','1.0'],
-                              color='#475569', fontsize=7)
-        ax_r.grid(color='#30363d', linestyle='--', linewidth=0.6)
-        ax_r.spines['polar'].set_color('#30363d')
-        ax_r.legend(facecolor='#21262d', labelcolor='#c9d1d9',
+                              color=ucharts.color('fg_subtle'), fontsize=7)
+        ax_r.grid(color=ucharts.color('grid'), linestyle='--', linewidth=0.6)
+        ax_r.spines['polar'].set_color(ucharts.color('spine'))
+        ax_r.legend(facecolor=ucharts.color('surface'), labelcolor=ucharts.color('fg'),
                     fontsize=9, loc='upper right', bbox_to_anchor=(1.35, 1.1))
         plt.tight_layout()
         st.pyplot(fig_r, transparent=True)
@@ -2031,41 +2027,41 @@ def page_model_performance(user):
         if has_timing:
             st.markdown("**Training Time vs Prediction Time**")
             fig_t, (ax_t1, ax_t2) = plt.subplots(1, 2, figsize=(10, 3.5),
-                                                   facecolor='#0d1117')
+                                                   facecolor='none')
             for ax_t in [ax_t1, ax_t2]:
-                ax_t.set_facecolor('#161b22')
+                ax_t.set_facecolor('none')
 
             # Training time bar
             bt = ax_t1.bar(short_names, train_times,
                            color=colors_bar[:len(model_names)], alpha=0.88)
-            ax_t1.set_title("Train Time (seconds)", color='#c9d1d9',
+            ax_t1.set_title("Train Time (seconds)", color=ucharts.color('fg'),
                             fontsize=9, fontweight='700')
-            ax_t1.tick_params(colors='#c9d1d9', labelsize=8)
+            ax_t1.tick_params(colors=ucharts.color('fg'), labelsize=8)
             for sp in ['top','right']:   ax_t1.spines[sp].set_visible(False)
-            for sp in ['left','bottom']: ax_t1.spines[sp].set_color('#30363d')
-            ax_t1.grid(True, axis='y', color='#21262d', linestyle='--',
+            for sp in ['left','bottom']: ax_t1.spines[sp].set_color(ucharts.color('spine'))
+            ax_t1.grid(True, axis='y', color=ucharts.color('surface'), linestyle='--',
                        linewidth=0.5, alpha=0.6)
             for bar in bt:
                 ax_t1.annotate(f"{bar.get_height():.2f}s",
                                xy=(bar.get_x()+bar.get_width()/2, bar.get_height()),
                                xytext=(0, 3), textcoords="offset points",
-                               ha='center', color='#c9d1d9', fontsize=7.5)
+                               ha='center', color=ucharts.color('fg'), fontsize=7.5)
 
             # Prediction time bar
             bp2 = ax_t2.bar(short_names, pred_times,
                             color=colors_bar[:len(model_names)], alpha=0.88)
-            ax_t2.set_title("Pred Time (ms / 1,000 samples)", color='#c9d1d9',
+            ax_t2.set_title("Pred Time (ms / 1,000 samples)", color=ucharts.color('fg'),
                             fontsize=9, fontweight='700')
-            ax_t2.tick_params(colors='#c9d1d9', labelsize=8)
+            ax_t2.tick_params(colors=ucharts.color('fg'), labelsize=8)
             for sp in ['top','right']:   ax_t2.spines[sp].set_visible(False)
-            for sp in ['left','bottom']: ax_t2.spines[sp].set_color('#30363d')
-            ax_t2.grid(True, axis='y', color='#21262d', linestyle='--',
+            for sp in ['left','bottom']: ax_t2.spines[sp].set_color(ucharts.color('spine'))
+            ax_t2.grid(True, axis='y', color=ucharts.color('surface'), linestyle='--',
                        linewidth=0.5, alpha=0.6)
             for bar in bp2:
                 ax_t2.annotate(f"{bar.get_height():.1f}ms",
                                xy=(bar.get_x()+bar.get_width()/2, bar.get_height()),
                                xytext=(0, 3), textcoords="offset points",
-                               ha='center', color='#c9d1d9', fontsize=7.5)
+                               ha='center', color=ucharts.color('fg'), fontsize=7.5)
             plt.tight_layout()
             st.pyplot(fig_t, transparent=True)
             plt.close()
@@ -2077,21 +2073,21 @@ def page_model_performance(user):
 
         st.markdown("---")
         st.markdown("**Precision vs Recall**")
-        fig3, ax3 = plt.subplots(figsize=(7, 4), facecolor='#0d1117')
-        ax3.set_facecolor('#161b22')
+        fig3, ax3 = plt.subplots(figsize=(7, 4), facecolor='none')
+        ax3.set_facecolor('none')
         for i, m in enumerate(model_names):
             ax3.scatter(recs[i], precs[i], color=colors_bar[i], s=120, zorder=5,
-                        edgecolors='white', linewidths=0.5)
+                        edgecolors=ucharts.color('surface'), linewidths=0.5)
             ax3.annotate(short_names[i], (recs[i]+0.003, precs[i]+0.003),
                          color=colors_bar[i], fontsize=9, fontweight='700')
-        ax3.set_xlabel("Recall", color='#c9d1d9', fontsize=9)
-        ax3.set_ylabel("Precision", color='#c9d1d9', fontsize=9)
-        ax3.tick_params(colors='#c9d1d9', labelsize=8)
+        ax3.set_xlabel("Recall", color=ucharts.color('fg'), fontsize=9)
+        ax3.set_ylabel("Precision", color=ucharts.color('fg'), fontsize=9)
+        ax3.tick_params(colors=ucharts.color('fg'), labelsize=8)
         for sp in ['top', 'right']:   ax3.spines[sp].set_visible(False)
-        for sp in ['left', 'bottom']: ax3.spines[sp].set_color('#30363d')
+        for sp in ['left', 'bottom']: ax3.spines[sp].set_color(ucharts.color('spine'))
         ax3.set_xlim(0.3, 1.05)
         ax3.set_ylim(0.3, 1.05)
-        ax3.grid(True, color='#21262d', linestyle='--', linewidth=0.5, alpha=0.6)
+        ax3.grid(True, color=ucharts.color('surface'), linestyle='--', linewidth=0.5, alpha=0.6)
         plt.tight_layout()
         st.pyplot(fig3, transparent=True)
         plt.close()
@@ -2113,18 +2109,21 @@ def page_model_performance(user):
             spec_list.append(spec)
             with col:
                 st.markdown(f"**{short_names[idx]}**")
-                fig_cm, ax_cm = plt.subplots(figsize=(2.6, 2.2), facecolor='#0d1117')
-                ax_cm.set_facecolor('#0d1117')
+                fig_cm, ax_cm = plt.subplots(figsize=(2.6, 2.2), facecolor='none')
+                ax_cm.set_facecolor('none')
                 cm_arr = [[tn, fp], [fn, tp]]
-                ax_cm.imshow(cm_arr, cmap='RdYlGn', aspect='auto', vmin=0)
+                _im_cm = ax_cm.imshow(cm_arr, cmap=ucharts.cmap('sequential', reverse=True),
+                                      aspect='auto', vmin=0)
                 for r in range(2):
                     for c_ in range(2):
                         ax_cm.text(c_, r, str(cm_arr[r][c_]),
-                                   ha='center', va='center', color='black', fontsize=10, fontweight='700')
+                                   ha='center', va='center',
+                                   color=ucharts.on_color(_im_cm.cmap(_im_cm.norm(cm_arr[r][c_]))),
+                                   fontsize=10, fontweight='700')
                 ax_cm.set_xticks([0, 1])
                 ax_cm.set_yticks([0, 1])
-                ax_cm.set_xticklabels(['P0', 'P1'], color='#c9d1d9', fontsize=7)
-                ax_cm.set_yticklabels(['A0', 'A1'], color='#c9d1d9', fontsize=7)
+                ax_cm.set_xticklabels(['P0', 'P1'], color=ucharts.color('fg'), fontsize=7)
+                ax_cm.set_yticklabels(['A0', 'A1'], color=ucharts.color('fg'), fontsize=7)
                 ax_cm.tick_params(length=0)
                 plt.tight_layout(pad=0.3)
                 st.pyplot(fig_cm, transparent=True)
@@ -2135,24 +2134,24 @@ def page_model_performance(user):
                 Spec:<b style="color:#3b82f6"> {spec:.1%}</b></div>""", unsafe_allow_html=True)
         st.markdown("---")
         st.markdown("#### Sensitivity vs Specificity")
-        fig_ss, ax_ss = plt.subplots(figsize=(8, 3.5), facecolor='#0d1117')
-        ax_ss.set_facecolor('#161b22')
+        fig_ss, ax_ss = plt.subplots(figsize=(8, 3.5), facecolor='none')
+        ax_ss.set_facecolor('none')
         xr = range(len(model_names))
         w = 0.35
-        bs = ax_ss.bar([i - w/2 for i in xr], sens_list, width=w, label='Sensitivity', color='#ef4444', alpha=0.85)
-        bp = ax_ss.bar([i + w/2 for i in xr], spec_list, width=w, label='Specificity',  color='#3b82f6', alpha=0.85)
+        bs = ax_ss.bar([i - w/2 for i in xr], sens_list, width=w, label='Sensitivity', color=ucharts.color('risk_high'), alpha=0.85)
+        bp = ax_ss.bar([i + w/2 for i in xr], spec_list, width=w, label='Specificity',  color=ucharts.color('primary'), alpha=0.85)
         ax_ss.set_xticks(list(xr))
-        ax_ss.set_xticklabels(short_names, color='#c9d1d9', fontsize=9)
+        ax_ss.set_xticklabels(short_names, color=ucharts.color('fg'), fontsize=9)
         ax_ss.set_ylim(0, 1.15)
-        ax_ss.tick_params(colors='#c9d1d9', labelsize=8)
-        ax_ss.legend(facecolor='#21262d', labelcolor='#c9d1d9', fontsize=9)
+        ax_ss.tick_params(colors=ucharts.color('fg'), labelsize=8)
+        ax_ss.legend(facecolor=ucharts.color('surface'), labelcolor=ucharts.color('fg'), fontsize=9)
         for sp in ['top', 'right']:   ax_ss.spines[sp].set_visible(False)
-        for sp in ['left', 'bottom']: ax_ss.spines[sp].set_color('#30363d')
+        for sp in ['left', 'bottom']: ax_ss.spines[sp].set_color(ucharts.color('spine'))
         for bar in list(bs) + list(bp):
             ax_ss.annotate(f"{bar.get_height():.2f}",
                            xy=(bar.get_x() + bar.get_width()/2, bar.get_height()),
                            xytext=(0, 3), textcoords="offset points",
-                           ha='center', color='#c9d1d9', fontsize=7.5, fontweight='600')
+                           ha='center', color=ucharts.color('fg'), fontsize=7.5, fontweight='600')
         plt.tight_layout()
         st.pyplot(fig_ss, transparent=True)
         plt.close()
@@ -2313,21 +2312,21 @@ def page_model_performance(user):
             bar_colors = [gradient_hex(j, len(sorted_ii)) for j in range(len(sorted_ii))]
 
             fig_fi, ax_fi = plt.subplots(figsize=(9, max(5, len(feature_names)*0.45)),
-                                         facecolor='#0d1117')
-            ax_fi.set_facecolor('#161b22')
+                                         facecolor='none')
+            ax_fi.set_facecolor('none')
             bars_fi = ax_fi.barh(sorted_labels[::-1], sorted_vals[::-1],
                                   color=bar_colors[::-1], height=0.65)
-            ax_fi.set_xlabel("Normalised Importance", color='#c9d1d9', fontsize=9)
-            ax_fi.set_title(f"Feature Importance — {fi_sel}", color='#c9d1d9',
+            ax_fi.set_xlabel("Normalised Importance", color=ucharts.color('fg'), fontsize=9)
+            ax_fi.set_title(f"Feature Importance — {fi_sel}", color=ucharts.color('fg'),
                              fontsize=10, fontweight='700', pad=10)
-            ax_fi.tick_params(colors='#c9d1d9', labelsize=8)
+            ax_fi.tick_params(colors=ucharts.color('fg'), labelsize=8)
             for sp in ['top', 'right']:   ax_fi.spines[sp].set_visible(False)
-            for sp in ['left', 'bottom']: ax_fi.spines[sp].set_color('#30363d')
+            for sp in ['left', 'bottom']: ax_fi.spines[sp].set_color(ucharts.color('spine'))
             for bar in bars_fi:
                 ax_fi.text(bar.get_width() + 0.002,
                            bar.get_y() + bar.get_height()/2,
                            f"{bar.get_width():.3f}",
-                           va='center', color='#c9d1d9', fontsize=7.5, fontweight='600')
+                           va='center', color=ucharts.color('fg'), fontsize=7.5, fontweight='600')
             plt.tight_layout()
             st.pyplot(fig_fi, transparent=True)
             plt.close()
@@ -2355,16 +2354,16 @@ def page_model_performance(user):
                 'Steeper = fewer features dominate the model.</div>',
                 unsafe_allow_html=True)
             cumul = np.cumsum(sorted_vals)
-            fig_cum, ax_cum = plt.subplots(figsize=(8, 3.5), facecolor='#0d1117')
-            ax_cum.set_facecolor('#161b22')
+            fig_cum, ax_cum = plt.subplots(figsize=(8, 3.5), facecolor='none')
+            ax_cum.set_facecolor('none')
             ax_cum.plot(range(1, len(cumul)+1), cumul * 100,
-                        color='#a855f7', linewidth=2.5, marker='o', markersize=4)
+                        color=ucharts.color('series_random_forest'), linewidth=2.5, marker='o', markersize=4)
             ax_cum.fill_between(range(1, len(cumul)+1), cumul * 100,
-                                alpha=0.15, color='#a855f7')
+                                alpha=0.15, color=ucharts.color('series_random_forest'))
             # Mark 80%, 90%, 95% thresholds
-            for thresh, col, lbl in [(0.80, '#f59e0b', '80%'),
-                                      (0.90, '#ef4444', '90%'),
-                                      (0.95, '#10b981', '95%')]:
+            for thresh, col, lbl in [(0.80, ucharts.color('risk_borderline'), '80%'),
+                                      (0.90, ucharts.color('risk_high'), '90%'),
+                                      (0.95, ucharts.color('risk_low'), '95%')]:
                 idx_t = next((i for i, v in enumerate(cumul) if v >= thresh), len(cumul)-1)
                 ax_cum.axhline(thresh*100, color=col, linestyle='--', linewidth=1.2, alpha=0.7)
                 ax_cum.axvline(idx_t+1, color=col, linestyle='--', linewidth=1.2, alpha=0.7)
@@ -2372,14 +2371,14 @@ def page_model_performance(user):
                                 xy=(idx_t+1, thresh*100),
                                 xytext=(idx_t+1.3, thresh*100-4),
                                 color=col, fontsize=7.5, fontweight='700')
-            ax_cum.set_xlabel("Number of Top Features", color='#c9d1d9', fontsize=9)
-            ax_cum.set_ylabel("Cumulative Importance (%)", color='#c9d1d9', fontsize=9)
+            ax_cum.set_xlabel("Number of Top Features", color=ucharts.color('fg'), fontsize=9)
+            ax_cum.set_ylabel("Cumulative Importance (%)", color=ucharts.color('fg'), fontsize=9)
             ax_cum.set_xlim(1, len(cumul))
             ax_cum.set_ylim(0, 105)
-            ax_cum.tick_params(colors='#c9d1d9', labelsize=8)
+            ax_cum.tick_params(colors=ucharts.color('fg'), labelsize=8)
             for sp in ['top', 'right']:   ax_cum.spines[sp].set_visible(False)
-            for sp in ['left', 'bottom']: ax_cum.spines[sp].set_color('#30363d')
-            ax_cum.grid(True, color='#21262d', linestyle='--', linewidth=0.5, alpha=0.6)
+            for sp in ['left', 'bottom']: ax_cum.spines[sp].set_color(ucharts.color('spine'))
+            ax_cum.grid(True, color=ucharts.color('surface'), linestyle='--', linewidth=0.5, alpha=0.6)
             plt.tight_layout()
             st.pyplot(fig_cum, transparent=True)
             plt.close()
@@ -2390,9 +2389,9 @@ def page_model_performance(user):
                         unsafe_allow_html=True)
 
             tree_models = {
-                "RF":  ("random_forest.pkl",  "#10b981"),
-                "XGB": ("xgboost.pkl",         "#a855f7"),
-                "DT":  ("decision_tree.pkl",    "#f59e0b"),
+                "RF":  ("random_forest.pkl",  ucharts.color('risk_low')),
+                "XGB": ("xgboost.pkl",         ucharts.color('series_random_forest')),
+                "DT":  ("decision_tree.pkl",    ucharts.color('risk_borderline')),
             }
             top5_data = {}
             for short_lbl, (fname, _col) in tree_models.items():
@@ -2415,11 +2414,11 @@ def page_model_performance(user):
                 all_top_feats = list(dict.fromkeys(
                     feat for d in top5_data.values() for feat in d
                 ))
-                fig_cmp, ax_cmp = plt.subplots(figsize=(9, 4), facecolor='#0d1117')
-                ax_cmp.set_facecolor('#161b22')
+                fig_cmp, ax_cmp = plt.subplots(figsize=(9, 4), facecolor='none')
+                ax_cmp.set_facecolor('none')
                 x_cmp = np.arange(len(all_top_feats))
                 w_cmp = 0.25
-                clr_list = ["#10b981", "#a855f7", "#f59e0b"]
+                clr_list = ucharts.categorical(3)
                 for idx_m, (short_lbl, d) in enumerate(top5_data.items()):
                     vals_cmp = [d.get(f, 0) for f in all_top_feats]
                     offset = (idx_m - 1) * w_cmp
@@ -2428,12 +2427,12 @@ def page_model_performance(user):
                                color=clr_list[idx_m], alpha=0.85)
                 ax_cmp.set_xticks(x_cmp)
                 ax_cmp.set_xticklabels(all_top_feats, rotation=25, ha='right',
-                                        color='#c9d1d9', fontsize=8)
-                ax_cmp.tick_params(colors='#c9d1d9', labelsize=8)
-                ax_cmp.legend(facecolor='#21262d', labelcolor='#c9d1d9', fontsize=9)
+                                        color=ucharts.color('fg'), fontsize=8)
+                ax_cmp.tick_params(colors=ucharts.color('fg'), labelsize=8)
+                ax_cmp.legend(facecolor=ucharts.color('surface'), labelcolor=ucharts.color('fg'), fontsize=9)
                 for sp in ['top', 'right']:   ax_cmp.spines[sp].set_visible(False)
-                for sp in ['left', 'bottom']: ax_cmp.spines[sp].set_color('#30363d')
-                ax_cmp.set_ylabel("Importance", color='#c9d1d9', fontsize=9)
+                for sp in ['left', 'bottom']: ax_cmp.spines[sp].set_color(ucharts.color('spine'))
+                ax_cmp.set_ylabel("Importance", color=ucharts.color('fg'), fontsize=9)
                 plt.tight_layout()
                 st.pyplot(fig_cmp, transparent=True)
                 plt.close()
@@ -2467,24 +2466,24 @@ def page_model_performance(user):
                 hm_labels  = list(hm_data.keys())
                 fig_hm, ax_hm = plt.subplots(
                     figsize=(11, max(3, len(feature_names)*0.38)),
-                    facecolor='#0d1117')
-                ax_hm.set_facecolor('#0d1117')
-                im = ax_hm.imshow(hm_matrix, cmap='YlOrRd', aspect='auto')
+                    facecolor='none')
+                ax_hm.set_facecolor('none')
+                im = ax_hm.imshow(hm_matrix, cmap=ucharts.cmap('sequential'), aspect='auto')
                 ax_hm.set_xticks(range(len(feature_names)))
                 ax_hm.set_xticklabels(display_names, rotation=40, ha='right',
-                                       color='#c9d1d9', fontsize=7.5)
+                                       color=ucharts.color('fg'), fontsize=7.5)
                 ax_hm.set_yticks(range(len(hm_labels)))
-                ax_hm.set_yticklabels(hm_labels, color='#c9d1d9', fontsize=8)
+                ax_hm.set_yticklabels(hm_labels, color=ucharts.color('fg'), fontsize=8)
                 for r in range(len(hm_labels)):
                     for c in range(len(feature_names)):
                         val = hm_matrix[r, c]
-                        txt_col = 'black' if val > 0.12 else '#c9d1d9'
+                        txt_col = ucharts.on_color(im.cmap(im.norm(val)))
                         ax_hm.text(c, r, f"{val:.3f}",
                                    ha='center', va='center',
                                    color=txt_col, fontsize=6.5, fontweight='600')
                 cb = plt.colorbar(im, ax=ax_hm, fraction=0.025, pad=0.02)
-                cb.ax.tick_params(colors='#c9d1d9', labelsize=7)
-                cb.set_label('Normalised Importance', color='#c9d1d9', fontsize=8)
+                cb.ax.tick_params(colors=ucharts.color('fg'), labelsize=7)
+                cb.set_label('Normalised Importance', color=ucharts.color('fg'), fontsize=8)
                 plt.tight_layout()
                 st.pyplot(fig_hm, transparent=True)
                 plt.close()
@@ -2513,8 +2512,8 @@ def page_model_performance(user):
                 'Higher AUC = better discrimination ability.</div>',
                 unsafe_allow_html=True)
 
-            fig_roc, ax_roc = plt.subplots(figsize=(8, 5.5), facecolor='#0d1117')
-            ax_roc.set_facecolor('#161b22')
+            fig_roc, ax_roc = plt.subplots(figsize=(8, 5.5), facecolor='none')
+            ax_roc.set_facecolor('none')
 
             for i, mn in enumerate(model_names):
                 rcd = results[mn].get("roc_curve", {})
@@ -2527,24 +2526,24 @@ def page_model_performance(user):
                                 label=f"{short_names[i]} — AUC = {auc_v:.4f}")
 
             # Diagonal chance line
-            ax_roc.plot([0, 1], [0, 1], color='#475569', linestyle='--',
+            ax_roc.plot([0, 1], [0, 1], color=ucharts.color('fg_subtle'), linestyle='--',
                         linewidth=1.2, label='Random Chance (AUC=0.5)')
-            ax_roc.fill_between([0, 1], [0, 1], alpha=0.04, color='#475569')
+            ax_roc.fill_between([0, 1], [0, 1], alpha=0.04, color=ucharts.color('fg_subtle'))
 
             ax_roc.set_xlabel("False Positive Rate (1 - Specificity)",
-                              color='#c9d1d9', fontsize=10)
+                              color=ucharts.color('fg'), fontsize=10)
             ax_roc.set_ylabel("True Positive Rate (Sensitivity)",
-                               color='#c9d1d9', fontsize=10)
+                               color=ucharts.color('fg'), fontsize=10)
             ax_roc.set_title("ROC Curve — All Models",
-                             color='white', fontsize=12, fontweight='700', pad=12)
+                             color=ucharts.color('fg'), fontsize=12, fontweight='700', pad=12)
             ax_roc.set_xlim(0, 1); ax_roc.set_ylim(0, 1.02)
-            ax_roc.tick_params(colors='#c9d1d9', labelsize=9)
-            ax_roc.legend(facecolor='#21262d', labelcolor='#c9d1d9',
+            ax_roc.tick_params(colors=ucharts.color('fg'), labelsize=9)
+            ax_roc.legend(facecolor=ucharts.color('surface'), labelcolor=ucharts.color('fg'),
                           fontsize=9, loc='lower right',
-                          framealpha=0.8, edgecolor='#30363d')
+                          framealpha=0.8, edgecolor=ucharts.color('grid'))
             for sp in ['top', 'right']:   ax_roc.spines[sp].set_visible(False)
-            for sp in ['left', 'bottom']: ax_roc.spines[sp].set_color('#30363d')
-            ax_roc.grid(True, color='#21262d', linestyle='--', linewidth=0.5, alpha=0.7)
+            for sp in ['left', 'bottom']: ax_roc.spines[sp].set_color(ucharts.color('spine'))
+            ax_roc.grid(True, color=ucharts.color('surface'), linestyle='--', linewidth=0.5, alpha=0.7)
             plt.tight_layout()
             st.pyplot(fig_roc, transparent=True)
             plt.close()
@@ -2567,8 +2566,8 @@ def page_model_performance(user):
                 total_all += cm_d[0][0] + cm_d[0][1] + cm_d[1][0] + cm_d[1][1]
             baseline_prev = total_pos / max(total_all, 1)
 
-            fig_pr, ax_pr = plt.subplots(figsize=(8, 5.5), facecolor='#0d1117')
-            ax_pr.set_facecolor('#161b22')
+            fig_pr, ax_pr = plt.subplots(figsize=(8, 5.5), facecolor='none')
+            ax_pr.set_facecolor('none')
 
             for i, mn in enumerate(model_names):
                 prd = results[mn].get("pr_curve", {})
@@ -2581,22 +2580,22 @@ def page_model_performance(user):
                                label=f"{short_names[i]} — AP = {ap:.4f}")
 
             # Baseline (random)
-            ax_pr.axhline(baseline_prev, color='#475569', linestyle='--',
+            ax_pr.axhline(baseline_prev, color=ucharts.color('fg_subtle'), linestyle='--',
                           linewidth=1.2, label=f'Baseline (prevalence = {baseline_prev:.2f})')
 
             ax_pr.set_xlabel("Recall (True Positive Rate)",
-                             color='#c9d1d9', fontsize=10)
-            ax_pr.set_ylabel("Precision", color='#c9d1d9', fontsize=10)
+                             color=ucharts.color('fg'), fontsize=10)
+            ax_pr.set_ylabel("Precision", color=ucharts.color('fg'), fontsize=10)
             ax_pr.set_title("Precision-Recall Curve — All Models",
-                            color='white', fontsize=12, fontweight='700', pad=12)
+                            color=ucharts.color('fg'), fontsize=12, fontweight='700', pad=12)
             ax_pr.set_xlim(0, 1); ax_pr.set_ylim(0, 1.02)
-            ax_pr.tick_params(colors='#c9d1d9', labelsize=9)
-            ax_pr.legend(facecolor='#21262d', labelcolor='#c9d1d9',
+            ax_pr.tick_params(colors=ucharts.color('fg'), labelsize=9)
+            ax_pr.legend(facecolor=ucharts.color('surface'), labelcolor=ucharts.color('fg'),
                          fontsize=9, loc='upper right',
-                         framealpha=0.8, edgecolor='#30363d')
+                         framealpha=0.8, edgecolor=ucharts.color('grid'))
             for sp in ['top', 'right']:   ax_pr.spines[sp].set_visible(False)
-            for sp in ['left', 'bottom']: ax_pr.spines[sp].set_color('#30363d')
-            ax_pr.grid(True, color='#21262d', linestyle='--', linewidth=0.5, alpha=0.7)
+            for sp in ['left', 'bottom']: ax_pr.spines[sp].set_color(ucharts.color('spine'))
+            ax_pr.grid(True, color=ucharts.color('surface'), linestyle='--', linewidth=0.5, alpha=0.7)
             plt.tight_layout()
             st.pyplot(fig_pr, transparent=True)
             plt.close()
@@ -2623,20 +2622,20 @@ def page_model_performance(user):
                 acc_v   = (tp_v + tn_v) / max(total_v, 1)
 
                 with col_cm:
-                    fig_cm2, ax_cm2 = plt.subplots(figsize=(3.2, 3.0), facecolor='#0d1117')
-                    ax_cm2.set_facecolor('#0d1117')
+                    fig_cm2, ax_cm2 = plt.subplots(figsize=(3.2, 3.0), facecolor='none')
+                    ax_cm2.set_facecolor('none')
 
                     cm_arr2  = np.array([[tn_v, fp_v], [fn_v, tp_v]], dtype=float)
                     cm_norm  = cm_arr2 / max(cm_arr2.max(), 1)
 
-                    im = ax_cm2.imshow(cm_norm, cmap='RdYlGn',
+                    im = ax_cm2.imshow(cm_norm, cmap=ucharts.cmap('sequential', reverse=True),
                                        aspect='auto', vmin=0, vmax=1)
                     plt.colorbar(im, ax=ax_cm2, fraction=0.046, pad=0.04)
 
                     labels_mat = [[f"TN\n{tn_v}", f"FP\n{fp_v}"],
                                   [f"FN\n{fn_v}", f"TP\n{tp_v}"]]
-                    clr_txt = [['#1f2937','#1f2937'],
-                               ['#1f2937','#1f2937']]
+                    clr_txt = [[ucharts.on_color(im.cmap(im.norm(cm_norm[r][c])))
+                                for c in range(2)] for r in range(2)]
                     for r in range(2):
                         for c_ in range(2):
                             ax_cm2.text(c_, r, labels_mat[r][c_],
@@ -2647,11 +2646,11 @@ def page_model_performance(user):
                     ax_cm2.set_xticks([0, 1])
                     ax_cm2.set_yticks([0, 1])
                     ax_cm2.set_xticklabels(['Pred: 0\n(Low Risk)', 'Pred: 1\n(High Risk)'],
-                                           color='#c9d1d9', fontsize=7)
+                                           color=ucharts.color('fg'), fontsize=7)
                     ax_cm2.set_yticklabels(['Act: 0\n(Low Risk)', 'Act: 1\n(High Risk)'],
-                                           color='#c9d1d9', fontsize=7)
+                                           color=ucharts.color('fg'), fontsize=7)
                     ax_cm2.set_title(f"{short_names[idx]}\nAcc={acc_v:.1%}",
-                                     color='white', fontsize=9, fontweight='700', pad=8)
+                                     color=ucharts.color('fg'), fontsize=9, fontweight='700', pad=8)
                     ax_cm2.tick_params(length=0)
                     plt.tight_layout(pad=0.5)
                     st.pyplot(fig_cm2, transparent=True)
@@ -2702,7 +2701,7 @@ def page_model_performance(user):
                 'Please ask SuperAdmin to <b>re-train models</b> so CV results are saved.</div>',
                 unsafe_allow_html=True)
         else:
-            cv_colors  = ['#ef4444','#3b82f6','#f59e0b','#10b981','#a855f7']
+            cv_colors  = [ucharts.color('risk_high'),ucharts.color('primary'),ucharts.color('risk_borderline'),ucharts.color('risk_low'),ucharts.color('series_random_forest')]
             cv_metrics = ["accuracy","auc","f1","precision","recall"]
             cv_labels  = ["Accuracy","AUC","F1 Score","Precision","Recall"]
 
@@ -2742,9 +2741,9 @@ def page_model_performance(user):
 
             fig_folds, axes_folds = plt.subplots(
                 1, len(cv_metrics), figsize=(3.8 * len(cv_metrics), 4),
-                facecolor='#0d1117')
+                facecolor='none')
             for ax_f, met, lbl in zip(axes_folds, cv_metrics, cv_labels):
-                ax_f.set_facecolor('#161b22')
+                ax_f.set_facecolor('none')
                 for i, mn in enumerate(model_names):
                     cv = results[mn].get("kfold_cv")
                     if cv:
@@ -2755,23 +2754,23 @@ def page_model_performance(user):
                                   label=short_names[i])
                         ax_f.axhline(cv["mean"][met], color=cv_colors[i],
                                      linestyle='--', linewidth=0.7, alpha=0.5)
-                ax_f.set_title(lbl, color='#c9d1d9', fontsize=9, fontweight='700')
+                ax_f.set_title(lbl, color=ucharts.color('fg'), fontsize=9, fontweight='700')
                 ax_f.set_xticks(range(1, kfold_n+1))
                 ax_f.set_xticklabels([str(i) for i in range(1, kfold_n+1)],
-                                      color='#c9d1d9', fontsize=7)
+                                      color=ucharts.color('fg'), fontsize=7)
                 ax_f.set_ylim(0.4, 1.02)
-                ax_f.tick_params(colors='#c9d1d9', labelsize=7)
+                ax_f.tick_params(colors=ucharts.color('fg'), labelsize=7)
                 for sp in ['top','right']:   ax_f.spines[sp].set_visible(False)
-                for sp in ['left','bottom']: ax_f.spines[sp].set_color('#30363d')
-                ax_f.grid(True, color='#21262d', linestyle='--',
+                for sp in ['left','bottom']: ax_f.spines[sp].set_color(ucharts.color('spine'))
+                ax_f.grid(True, color=ucharts.color('surface'), linestyle='--',
                           linewidth=0.5, alpha=0.6)
 
             # shared legend below charts
             handles = [plt.Line2D([0],[0], color=cv_colors[i], lw=2, label=short_names[i])
                        for i in range(len(model_names))]
             fig_folds.legend(handles=handles, loc='lower center',
-                             ncol=len(model_names), facecolor='#21262d',
-                             labelcolor='#c9d1d9', fontsize=8,
+                             ncol=len(model_names), facecolor=ucharts.color('surface'),
+                             labelcolor=ucharts.color('fg'), fontsize=8,
                              bbox_to_anchor=(0.5, -0.08), framealpha=0.8)
             plt.tight_layout()
             st.pyplot(fig_folds, transparent=True)
@@ -2787,9 +2786,9 @@ def page_model_performance(user):
 
             fig_box, axes_box = plt.subplots(
                 1, len(cv_metrics), figsize=(3.8 * len(cv_metrics), 4.5),
-                facecolor='#0d1117')
+                facecolor='none')
             for ax_b, met, lbl in zip(axes_box, cv_metrics, cv_labels):
-                ax_b.set_facecolor('#161b22')
+                ax_b.set_facecolor('none')
                 box_data   = []
                 box_colors = []
                 box_labels = []
@@ -2802,25 +2801,25 @@ def page_model_performance(user):
 
                 bp = ax_b.boxplot(box_data, patch_artist=True,
                                   widths=0.5, notch=False,
-                                  medianprops=dict(color='white', linewidth=2))
+                                  medianprops=dict(color=ucharts.color('surface'), linewidth=2))
                 for patch, col in zip(bp['boxes'], box_colors):
                     patch.set_facecolor(col)
                     patch.set_alpha(0.75)
                 for whisker in bp['whiskers']:
-                    whisker.set_color('#475569')
+                    whisker.set_color(ucharts.color('fg_subtle'))
                 for cap in bp['caps']:
-                    cap.set_color('#475569')
+                    cap.set_color(ucharts.color('fg_subtle'))
                 for flier in bp['fliers']:
-                    flier.set(marker='o', color='#94a3b8',
+                    flier.set(marker='o', color=ucharts.color('fg_muted'),
                               markersize=4, alpha=0.6)
 
-                ax_b.set_xticklabels(box_labels, color='#c9d1d9', fontsize=8)
-                ax_b.set_title(lbl, color='#c9d1d9', fontsize=9, fontweight='700')
+                ax_b.set_xticklabels(box_labels, color=ucharts.color('fg'), fontsize=8)
+                ax_b.set_title(lbl, color=ucharts.color('fg'), fontsize=9, fontweight='700')
                 ax_b.set_ylim(0.35, 1.05)
-                ax_b.tick_params(colors='#c9d1d9', labelsize=7)
+                ax_b.tick_params(colors=ucharts.color('fg'), labelsize=7)
                 for sp in ['top','right']:   ax_b.spines[sp].set_visible(False)
-                for sp in ['left','bottom']: ax_b.spines[sp].set_color('#30363d')
-                ax_b.grid(True, axis='y', color='#21262d',
+                for sp in ['left','bottom']: ax_b.spines[sp].set_color(ucharts.color('spine'))
+                ax_b.grid(True, axis='y', color=ucharts.color('surface'),
                           linestyle='--', linewidth=0.5, alpha=0.6)
 
             plt.tight_layout()
@@ -2842,22 +2841,23 @@ def page_model_performance(user):
                 for mn in model_names
             ])
 
-            fig_hm, ax_hm = plt.subplots(figsize=(8, 3.5), facecolor='#0d1117')
-            ax_hm.set_facecolor('#0d1117')
-            im_h = ax_hm.imshow(std_matrix, cmap='YlOrRd_r',
+            fig_hm, ax_hm = plt.subplots(figsize=(8, 3.5), facecolor='none')
+            ax_hm.set_facecolor('none')
+            im_h = ax_hm.imshow(std_matrix, cmap=ucharts.cmap('sequential', reverse=True),
                                  aspect='auto', vmin=0, vmax=0.05)
             plt.colorbar(im_h, ax=ax_hm, fraction=0.03, pad=0.02)
             ax_hm.set_xticks(range(len(cv_labels)))
             ax_hm.set_yticks(range(len(model_names)))
-            ax_hm.set_xticklabels(cv_labels, color='#c9d1d9', fontsize=9)
-            ax_hm.set_yticklabels(short_names, color='#c9d1d9', fontsize=9)
+            ax_hm.set_xticklabels(cv_labels, color=ucharts.color('fg'), fontsize=9)
+            ax_hm.set_yticklabels(short_names, color=ucharts.color('fg'), fontsize=9)
             ax_hm.set_title("Std Deviation per Model & Metric (lower = more stable)",
-                            color='white', fontsize=10, fontweight='700', pad=10)
+                            color=ucharts.color('fg'), fontsize=10, fontweight='700', pad=10)
             for r in range(len(model_names)):
                 for c_ in range(len(cv_metrics)):
                     ax_hm.text(c_, r, f"{std_matrix[r,c_]:.4f}",
                                ha='center', va='center',
-                               color='#1f2937', fontsize=8, fontweight='700')
+                               color=ucharts.on_color(im_h.cmap(im_h.norm(std_matrix[r, c_]))),
+                               fontsize=8, fontweight='700')
             ax_hm.tick_params(length=0)
             plt.tight_layout()
             st.pyplot(fig_hm, transparent=True)
@@ -3100,23 +3100,23 @@ def page_model_performance(user):
                     ]
                     fig_sb, ax_sb = plt.subplots(
                         figsize=(6, max(4.5, len(shap_feat_names)*0.44)),
-                        facecolor='#0d1117')
-                    ax_sb.set_facecolor('#161b22')
+                        facecolor='none')
+                    ax_sb.set_facecolor('none')
                     hbars = ax_sb.barh(s_labels[::-1], s_vals[::-1],
                                        color=bar_clrs_shap[::-1], height=0.65)
-                    ax_sb.set_xlabel("Mean |SHAP value|", color='#c9d1d9', fontsize=9)
+                    ax_sb.set_xlabel("Mean |SHAP value|", color=ucharts.color('fg'), fontsize=9)
                     ax_sb.set_title(f"Global SHAP Impact — {shap_sel}",
-                                    color='#c9d1d9', fontsize=10, fontweight='700', pad=10)
-                    ax_sb.tick_params(colors='#c9d1d9', labelsize=8)
+                                    color=ucharts.color('fg'), fontsize=10, fontweight='700', pad=10)
+                    ax_sb.tick_params(colors=ucharts.color('fg'), labelsize=8)
                     for sp in ['top','right']:   ax_sb.spines[sp].set_visible(False)
-                    for sp in ['left','bottom']: ax_sb.spines[sp].set_color('#30363d')
-                    ax_sb.grid(True, axis='x', color='#21262d', linestyle='--',
+                    for sp in ['left','bottom']: ax_sb.spines[sp].set_color(ucharts.color('spine'))
+                    ax_sb.grid(True, axis='x', color=ucharts.color('surface'), linestyle='--',
                                linewidth=0.5, alpha=0.6)
                     for hbar in hbars:
                         ax_sb.text(hbar.get_width() + max(s_vals)*0.01,
                                    hbar.get_y() + hbar.get_height()/2,
                                    f"{hbar.get_width():.4f}",
-                                   va='center', color='#c9d1d9', fontsize=7.5, fontweight='600')
+                                   va='center', color=ucharts.color('fg'), fontsize=7.5, fontweight='600')
                     plt.tight_layout()
                     st.pyplot(fig_sb, transparent=True)
                     plt.close()
@@ -3130,8 +3130,8 @@ def page_model_performance(user):
                         unsafe_allow_html=True)
                     fig_bsw, ax_bsw = plt.subplots(
                         figsize=(6, max(4.5, len(shap_feat_names)*0.44)),
-                        facecolor='#0d1117')
-                    ax_bsw.set_facecolor('#161b22')
+                        facecolor='none')
+                    ax_bsw.set_facecolor('none')
                     bg_arr = bg_data.values
                     np.random.seed(42)
                     for fi_rank, real_idx in enumerate(sorted_idx):
@@ -3142,24 +3142,24 @@ def page_model_performance(user):
                         y_pos  = len(sorted_idx) - 1 - fi_rank
                         jitter = np.random.uniform(-0.35, 0.35, len(shap_col_vals))
                         ax_bsw.scatter(shap_col_vals, y_pos + jitter,
-                                       c=feat_norm, cmap='RdBu_r',
+                                       c=feat_norm, cmap=ucharts.cmap('diverging'),
                                        alpha=0.50, s=9, linewidths=0)
-                    ax_bsw.axvline(0, color='#94a3b8', linestyle='--', linewidth=1.0)
+                    ax_bsw.axvline(0, color=ucharts.color('fg_muted'), linestyle='--', linewidth=1.0)
                     ax_bsw.set_yticks(range(len(shap_feat_names)))
-                    ax_bsw.set_yticklabels(s_labels, color='#c9d1d9', fontsize=7.5)
-                    ax_bsw.set_xlabel("SHAP value", color='#c9d1d9', fontsize=9)
+                    ax_bsw.set_yticklabels(s_labels, color=ucharts.color('fg'), fontsize=7.5)
+                    ax_bsw.set_xlabel("SHAP value", color=ucharts.color('fg'), fontsize=9)
                     ax_bsw.set_title("Beeswarm — All Patients",
-                                     color='#c9d1d9', fontsize=10, fontweight='700', pad=10)
-                    ax_bsw.tick_params(colors='#c9d1d9', labelsize=8)
+                                     color=ucharts.color('fg'), fontsize=10, fontweight='700', pad=10)
+                    ax_bsw.tick_params(colors=ucharts.color('fg'), labelsize=8)
                     for sp in ['top','right']:   ax_bsw.spines[sp].set_visible(False)
-                    for sp in ['left','bottom']: ax_bsw.spines[sp].set_color('#30363d')
+                    for sp in ['left','bottom']: ax_bsw.spines[sp].set_color(ucharts.color('spine'))
                     # Colorbar legend
-                    sm = plt.cm.ScalarMappable(cmap='RdBu_r',
+                    sm = plt.cm.ScalarMappable(cmap=ucharts.cmap('diverging'),
                                                norm=plt.Normalize(vmin=0, vmax=1))
                     sm.set_array([])
                     cb2 = plt.colorbar(sm, ax=ax_bsw, fraction=0.03, pad=0.02)
-                    cb2.set_label('Feature Value (normalised)', color='#c9d1d9', fontsize=7)
-                    cb2.ax.tick_params(colors='#c9d1d9', labelsize=6)
+                    cb2.set_label('Feature Value (normalised)', color=ucharts.color('fg'), fontsize=7)
+                    cb2.ax.tick_params(colors=ucharts.color('fg'), labelsize=6)
                     plt.tight_layout()
                     st.pyplot(fig_bsw, transparent=True)
                     plt.close()
@@ -3198,11 +3198,11 @@ def page_model_performance(user):
 
                 fig_wf, ax_wf = plt.subplots(
                     figsize=(9, max(5, len(wf_labels)*0.52)),
-                    facecolor='#0d1117')
-                ax_wf.set_facecolor('#161b22')
+                    facecolor='none')
+                ax_wf.set_facecolor('none')
                 wf_labels_rev = wf_labels[::-1]
                 wf_shap_rev   = wf_shap[::-1]
-                wf_c = ['#ef4444' if v >= 0 else '#10b981' for v in wf_shap_rev]
+                wf_c = [ucharts.color('risk_high') if v >= 0 else ucharts.color('risk_low') for v in wf_shap_rev]
                 y_pos_wf = range(len(wf_labels_rev))
                 for iy, (start, sv_w, col) in enumerate(
                         zip(wf_starts, wf_shap_rev, wf_c)):
@@ -3214,29 +3214,29 @@ def page_model_performance(user):
                         f"{'+' if sv_w>=0 else ''}{sv_w:.4f}",
                         va='center',
                         ha='left' if sv_w >= 0 else 'right',
-                        color='#c9d1d9', fontsize=8, fontweight='700')
-                ax_wf.axvline(base, color='#94a3b8', linestyle=':', linewidth=1.5,
+                        color=ucharts.color('fg'), fontsize=8, fontweight='700')
+                ax_wf.axvline(base, color=ucharts.color('fg_muted'), linestyle=':', linewidth=1.5,
                               label=f"Base value={base:.3f}")
                 ax_wf.set_yticks(list(y_pos_wf))
-                ax_wf.set_yticklabels(wf_labels_rev, color='#c9d1d9', fontsize=8.5)
-                ax_wf.set_xlabel("Model Output (probability)", color='#c9d1d9', fontsize=9)
+                ax_wf.set_yticklabels(wf_labels_rev, color=ucharts.color('fg'), fontsize=8.5)
+                ax_wf.set_xlabel("Model Output (probability)", color=ucharts.color('fg'), fontsize=9)
                 ax_wf.set_title(
                     f"Waterfall — Patient #{sample_idx}  "
                     f"| Pred prob: {float(np.clip(base + np.sum(wf_shap), 0, 1)):.3f}",
-                    color='#c9d1d9', fontsize=10, fontweight='700', pad=10)
-                ax_wf.tick_params(colors='#c9d1d9', labelsize=8)
-                ax_wf.legend(facecolor='#21262d', labelcolor='#c9d1d9', fontsize=8)
+                    color=ucharts.color('fg'), fontsize=10, fontweight='700', pad=10)
+                ax_wf.tick_params(colors=ucharts.color('fg'), labelsize=8)
+                ax_wf.legend(facecolor=ucharts.color('surface'), labelcolor=ucharts.color('fg'), fontsize=8)
                 for sp in ['top','right']:   ax_wf.spines[sp].set_visible(False)
-                for sp in ['left','bottom']: ax_wf.spines[sp].set_color('#30363d')
-                ax_wf.grid(True, axis='x', color='#21262d', linestyle='--',
+                for sp in ['left','bottom']: ax_wf.spines[sp].set_color(ucharts.color('spine'))
+                ax_wf.grid(True, axis='x', color=ucharts.color('surface'), linestyle='--',
                            linewidth=0.5, alpha=0.6)
                 # Legend for colours
-                red_patch   = mpatches.Patch(color='#ef4444', alpha=0.88,
+                red_patch   = mpatches.Patch(color=ucharts.color('risk_high'), alpha=0.88,
                                              label='Increases Risk (+SHAP)')
-                green_patch = mpatches.Patch(color='#10b981', alpha=0.88,
+                green_patch = mpatches.Patch(color=ucharts.color('risk_low'), alpha=0.88,
                                              label='Decreases Risk (−SHAP)')
                 ax_wf.legend(handles=[red_patch, green_patch],
-                             facecolor='#21262d', labelcolor='#c9d1d9',
+                             facecolor=ucharts.color('surface'), labelcolor=ucharts.color('fg'),
                              fontsize=8, loc='lower right')
                 plt.tight_layout()
                 st.pyplot(fig_wf, transparent=True)
@@ -3267,23 +3267,23 @@ def page_model_performance(user):
                 ptp_c = dep_col_vals.max() - dep_col_vals.min()
                 dep_col_norm = (dep_col_vals - dep_col_vals.min()) / (ptp_c + 1e-9)
 
-                fig_dep, ax_dep = plt.subplots(figsize=(9, 4.5), facecolor='#0d1117')
-                ax_dep.set_facecolor('#161b22')
+                fig_dep, ax_dep = plt.subplots(figsize=(9, 4.5), facecolor='none')
+                ax_dep.set_facecolor('none')
                 sc = ax_dep.scatter(dep_feat_vals, dep_shap_vals,
-                                    c=dep_col_norm, cmap='RdYlGn',
+                                    c=dep_col_norm, cmap=ucharts.cmap('sequential', reverse=True),
                                     alpha=0.55, s=18, linewidths=0)
-                ax_dep.axhline(0, color='#94a3b8', linestyle='--', linewidth=1)
-                ax_dep.set_xlabel(f"{dep_sel} (scaled)", color='#c9d1d9', fontsize=9)
-                ax_dep.set_ylabel(f"SHAP value of {dep_sel}", color='#c9d1d9', fontsize=9)
+                ax_dep.axhline(0, color=ucharts.color('fg_muted'), linestyle='--', linewidth=1)
+                ax_dep.set_xlabel(f"{dep_sel} (scaled)", color=ucharts.color('fg'), fontsize=9)
+                ax_dep.set_ylabel(f"SHAP value of {dep_sel}", color=ucharts.color('fg'), fontsize=9)
                 ax_dep.set_title(
                     f"Dependence Plot: {dep_sel}  (colour = {col_label})",
-                    color='#c9d1d9', fontsize=10, fontweight='700', pad=10)
-                ax_dep.tick_params(colors='#c9d1d9', labelsize=8)
+                    color=ucharts.color('fg'), fontsize=10, fontweight='700', pad=10)
+                ax_dep.tick_params(colors=ucharts.color('fg'), labelsize=8)
                 for sp in ['top','right']:   ax_dep.spines[sp].set_visible(False)
-                for sp in ['left','bottom']: ax_dep.spines[sp].set_color('#30363d')
+                for sp in ['left','bottom']: ax_dep.spines[sp].set_color(ucharts.color('spine'))
                 cb_dep = plt.colorbar(sc, ax=ax_dep, fraction=0.025, pad=0.02)
-                cb_dep.set_label(col_label, color='#c9d1d9', fontsize=8)
-                cb_dep.ax.tick_params(colors='#c9d1d9', labelsize=7)
+                cb_dep.set_label(col_label, color=ucharts.color('fg'), fontsize=8)
+                cb_dep.ax.tick_params(colors=ucharts.color('fg'), labelsize=7)
                 plt.tight_layout()
                 st.pyplot(fig_dep, transparent=True)
                 plt.close()
@@ -3394,26 +3394,29 @@ def page_model_performance(user):
             st.markdown("#### Sensitivity / Specificity Trade-off")
             sweep = prof["sweep"]
             sx = [s["threshold"] for s in sweep]
-            fig_sw, ax_sw = plt.subplots(figsize=(9, 3.8), facecolor='#0d1117')
-            ax_sw.set_facecolor('#161b22')
-            for key, col, lbl in [("sensitivity", "#ef4444", "Sensitivity (recall)"),
-                                  ("specificity", "#3b82f6", "Specificity"),
-                                  ("ppv", "#10b981", "PPV (precision)"),
-                                  ("npv", "#a855f7", "NPV")]:
+            fig_sw, ax_sw = plt.subplots(figsize=(9, 3.8), facecolor='none')
+            ax_sw.set_facecolor('none')
+            # Four operating characteristics. None of them is a risk band, so they take
+            # the categorical ramp — risk hues here would imply a clinical reading the
+            # curves do not carry.
+            for key, col, lbl in zip(
+                    ["sensitivity", "specificity", "ppv", "npv"],
+                    ucharts.categorical(4),
+                    ["Sensitivity (recall)", "Specificity", "PPV (precision)", "NPV"]):
                 ax_sw.plot(sx, [s[key] for s in sweep], color=col, lw=2, label=lbl)
-            ax_sw.axvline(rec["threshold"], color='#f59e0b', ls='--', lw=1.8,
+            ax_sw.axvline(rec["threshold"], color=ucharts.color('risk_borderline'), ls='--', lw=1.8,
                           label=f"Operating point ({rec['threshold']:.3f})")
-            ax_sw.axvline(0.50, color='#64748b', ls=':', lw=1.5, label="Legacy 0.50")
-            ax_sw.axhline(pol.get("target_sensitivity", 0.85), color='#ef4444',
+            ax_sw.axvline(0.50, color=ucharts.color('reference'), ls=':', lw=1.5, label="Legacy 0.50")
+            ax_sw.axhline(pol.get("target_sensitivity", 0.85), color=ucharts.color('risk_high'),
                           ls=':', lw=1, alpha=0.5)
-            ax_sw.set_xlabel("Decision threshold", color='#c9d1d9', fontsize=9)
-            ax_sw.set_ylabel("Metric value", color='#c9d1d9', fontsize=9)
+            ax_sw.set_xlabel("Decision threshold", color=ucharts.color('fg'), fontsize=9)
+            ax_sw.set_ylabel("Metric value", color=ucharts.color('fg'), fontsize=9)
             ax_sw.set_ylim(0, 1.02)
-            ax_sw.tick_params(colors='#c9d1d9', labelsize=8)
-            ax_sw.grid(True, color='#21262d', ls='--', lw=0.5, alpha=0.6)
+            ax_sw.tick_params(colors=ucharts.color('fg'), labelsize=8)
+            ax_sw.grid(True, color=ucharts.color('surface'), ls='--', lw=0.5, alpha=0.6)
             for sp in ['top', 'right']:   ax_sw.spines[sp].set_visible(False)
-            for sp in ['left', 'bottom']: ax_sw.spines[sp].set_color('#30363d')
-            ax_sw.legend(facecolor='#21262d', labelcolor='#c9d1d9', fontsize=7.5,
+            for sp in ['left', 'bottom']: ax_sw.spines[sp].set_color(ucharts.color('spine'))
+            ax_sw.legend(facecolor=ucharts.color('surface'), labelcolor=ucharts.color('fg'), fontsize=7.5,
                          loc='center right')
             plt.tight_layout()
             st.pyplot(fig_sw, transparent=True)
@@ -3431,22 +3434,22 @@ def page_model_performance(user):
                 unsafe_allow_html=True)
             nb = prof["net_benefit"]
             nx = [p["pt"] for p in nb]
-            fig_nb, ax_nb = plt.subplots(figsize=(9, 3.6), facecolor='#0d1117')
-            ax_nb.set_facecolor('#161b22')
-            ax_nb.plot(nx, [p["model"] for p in nb], color='#10b981', lw=2.2,
+            fig_nb, ax_nb = plt.subplots(figsize=(9, 3.6), facecolor='none')
+            ax_nb.set_facecolor('none')
+            ax_nb.plot(nx, [p["model"] for p in nb], color=ucharts.color('risk_low'), lw=2.2,
                        label=f"{thr_sel}")
-            ax_nb.plot(nx, [p["treat_all"] for p in nb], color='#64748b', lw=1.5,
+            ax_nb.plot(nx, [p["treat_all"] for p in nb], color=ucharts.color('reference'), lw=1.5,
                        ls='--', label="Treat all")
-            ax_nb.axhline(0, color='#475569', lw=1.5, ls=':', label="Treat none")
-            ax_nb.axvline(rec["threshold"], color='#f59e0b', ls='--', lw=1.6,
+            ax_nb.axhline(0, color=ucharts.color('fg_subtle'), lw=1.5, ls=':', label="Treat none")
+            ax_nb.axvline(rec["threshold"], color=ucharts.color('risk_borderline'), ls='--', lw=1.6,
                           label=f"Operating point")
-            ax_nb.set_xlabel("Threshold probability", color='#c9d1d9', fontsize=9)
-            ax_nb.set_ylabel("Net benefit", color='#c9d1d9', fontsize=9)
-            ax_nb.tick_params(colors='#c9d1d9', labelsize=8)
-            ax_nb.grid(True, color='#21262d', ls='--', lw=0.5, alpha=0.6)
+            ax_nb.set_xlabel("Threshold probability", color=ucharts.color('fg'), fontsize=9)
+            ax_nb.set_ylabel("Net benefit", color=ucharts.color('fg'), fontsize=9)
+            ax_nb.tick_params(colors=ucharts.color('fg'), labelsize=8)
+            ax_nb.grid(True, color=ucharts.color('surface'), ls='--', lw=0.5, alpha=0.6)
             for sp in ['top', 'right']:   ax_nb.spines[sp].set_visible(False)
-            for sp in ['left', 'bottom']: ax_nb.spines[sp].set_color('#30363d')
-            ax_nb.legend(facecolor='#21262d', labelcolor='#c9d1d9', fontsize=8)
+            for sp in ['left', 'bottom']: ax_nb.spines[sp].set_color(ucharts.color('spine'))
+            ax_nb.legend(facecolor=ucharts.color('surface'), labelcolor=ucharts.color('fg'), fontsize=8)
             plt.tight_layout()
             st.pyplot(fig_nb, transparent=True)
             plt.close()
@@ -3566,23 +3569,23 @@ def page_model_performance(user):
             cfa, cfb = st.columns(2)
             with cfa:
                 st.markdown("**Discrimination (AUC ± 95% CI)**")
-                fig_f, ax_f = plt.subplots(figsize=(5.4, 3.4), facecolor='#0d1117')
-                ax_f.set_facecolor('#161b22')
+                fig_f, ax_f = plt.subplots(figsize=(5.4, 3.4), facecolor='none')
+                ax_f.set_facecolor('none')
                 bars_f = ax_f.barh(lbls[::-1], aucs_s[::-1],
                                    xerr=[errs[0][::-1], errs[1][::-1]],
-                                   color=['#10b981' if a >= 0.80 else '#f59e0b'
-                                          if a >= 0.75 else '#ef4444'
+                                   color=[ucharts.color('risk_low') if a >= 0.80 else ucharts.color('risk_borderline')
+                                          if a >= 0.75 else ucharts.color('risk_high')
                                           for a in aucs_s][::-1],
-                                   height=0.6, ecolor='#64748b', capsize=3)
+                                   height=0.6, ecolor=ucharts.color('reference'), capsize=3)
                 overall = results.get("Random Forest", {}).get("auc", 0.80)
-                ax_f.axvline(overall, color='#3b82f6', ls='--', lw=1.5,
+                ax_f.axvline(overall, color=ucharts.color('primary'), ls='--', lw=1.5,
                              label=f"Overall ({overall:.3f})")
                 ax_f.set_xlim(0.5, 0.95)
-                ax_f.set_xlabel("AUC", color='#c9d1d9', fontsize=8.5)
-                ax_f.tick_params(colors='#c9d1d9', labelsize=8)
+                ax_f.set_xlabel("AUC", color=ucharts.color('fg'), fontsize=8.5)
+                ax_f.tick_params(colors=ucharts.color('fg'), labelsize=8)
                 for sp in ['top', 'right']:   ax_f.spines[sp].set_visible(False)
-                for sp in ['left', 'bottom']: ax_f.spines[sp].set_color('#30363d')
-                ax_f.legend(facecolor='#21262d', labelcolor='#c9d1d9', fontsize=7.5)
+                for sp in ['left', 'bottom']: ax_f.spines[sp].set_color(ucharts.color('spine'))
+                ax_f.legend(facecolor=ucharts.color('surface'), labelcolor=ucharts.color('fg'), fontsize=7.5)
                 plt.tight_layout()
                 st.pyplot(fig_f, transparent=True)
                 plt.close()
@@ -3590,19 +3593,19 @@ def page_model_performance(user):
             with cfb:
                 st.markdown("**Calibration gap (predicted − observed)**")
                 gaps = [lv["calibration_gap"] for lv in levels]
-                fig_g, ax_g = plt.subplots(figsize=(5.4, 3.4), facecolor='#0d1117')
-                ax_g.set_facecolor('#161b22')
+                fig_g, ax_g = plt.subplots(figsize=(5.4, 3.4), facecolor='none')
+                ax_g.set_facecolor('none')
                 ax_g.barh(lbls[::-1], gaps[::-1],
-                          color=['#10b981' if abs(g) < 0.02 else '#f59e0b'
-                                 if abs(g) < 0.05 else '#ef4444'
+                          color=[ucharts.color('risk_low') if abs(g) < 0.02 else ucharts.color('risk_borderline')
+                                 if abs(g) < 0.05 else ucharts.color('risk_high')
                                  for g in gaps][::-1], height=0.6)
-                ax_g.axvline(0, color='#94a3b8', lw=1.2)
-                ax_g.axvspan(-0.02, 0.02, color='#10b981', alpha=0.10)
+                ax_g.axvline(0, color=ucharts.color('fg_muted'), lw=1.2)
+                ax_g.axvspan(-0.02, 0.02, color=ucharts.color('risk_low'), alpha=0.10)
                 ax_g.set_xlabel("Gap (0 = perfectly calibrated)",
-                                color='#c9d1d9', fontsize=8.5)
-                ax_g.tick_params(colors='#c9d1d9', labelsize=8)
+                                color=ucharts.color('fg'), fontsize=8.5)
+                ax_g.tick_params(colors=ucharts.color('fg'), labelsize=8)
                 for sp in ['top', 'right']:   ax_g.spines[sp].set_visible(False)
-                for sp in ['left', 'bottom']: ax_g.spines[sp].set_color('#30363d')
+                for sp in ['left', 'bottom']: ax_g.spines[sp].set_color(ucharts.color('spine'))
                 plt.tight_layout()
                 st.pyplot(fig_g, transparent=True)
                 plt.close()
@@ -3693,21 +3696,21 @@ def page_model_performance(user):
             # ── Benchmark bar chart ────────────────────────────────────
             names = [r["Model"] for r in brows]
             vals = [float(r["AUC"]) for r in brows]
-            fig_b, ax_b = plt.subplots(figsize=(9, 3.2), facecolor='#0d1117')
-            ax_b.set_facecolor('#161b22')
+            fig_b, ax_b = plt.subplots(figsize=(9, 3.2), facecolor='none')
+            ax_b.set_facecolor('none')
             bars_b = ax_b.barh(
                 [n.replace(" (", "\n(") for n in names][::-1], vals[::-1],
-                color=(['#10b981'] + ['#64748b'] * (len(vals) - 1))[::-1], height=0.6)
+                color=([ucharts.color('risk_low')] + [ucharts.color('reference')] * (len(vals) - 1))[::-1], height=0.6)
             ax_b.set_xlim(0.5, 0.88)
-            ax_b.set_xlabel("AUC", color='#c9d1d9', fontsize=9)
-            ax_b.tick_params(colors='#c9d1d9', labelsize=8)
+            ax_b.set_xlabel("AUC", color=ucharts.color('fg'), fontsize=9)
+            ax_b.tick_params(colors=ucharts.color('fg'), labelsize=8)
             for sp in ['top', 'right']:   ax_b.spines[sp].set_visible(False)
-            for sp in ['left', 'bottom']: ax_b.spines[sp].set_color('#30363d')
+            for sp in ['left', 'bottom']: ax_b.spines[sp].set_color(ucharts.color('spine'))
             for bar in bars_b:
                 ax_b.text(bar.get_width() + 0.004,
                           bar.get_y() + bar.get_height() / 2,
                           f"{bar.get_width():.4f}", va='center',
-                          color='#c9d1d9', fontsize=8, fontweight='600')
+                          color=ucharts.color('fg'), fontsize=8, fontweight='600')
             plt.tight_layout()
             st.pyplot(fig_b, transparent=True)
             plt.close()
@@ -3736,9 +3739,9 @@ def page_model_performance(user):
 
                 lx = [r["step"].replace("+ ", "+\n") for r in ladder]
                 ly = [r["auc"] for r in ladder]
-                fig_l, ax_l = plt.subplots(figsize=(9, 3.4), facecolor='#0d1117')
-                ax_l.set_facecolor('#161b22')
-                ax_l.plot(range(len(ly)), ly, marker='o', color='#10b981', lw=2.2,
+                fig_l, ax_l = plt.subplots(figsize=(9, 3.4), facecolor='none')
+                ax_l.set_facecolor('none')
+                ax_l.plot(range(len(ly)), ly, marker='o', color=ucharts.color('risk_low'), lw=2.2,
                           markersize=7)
                 for i, r in enumerate(ladder):
                     if r.get("delta_auc") is not None:
@@ -3746,15 +3749,15 @@ def page_model_performance(user):
                         ax_l.annotate(f"{r['delta_auc']:+.4f}", (i, ly[i]),
                                       textcoords="offset points", xytext=(0, 11),
                                       ha='center', fontsize=8.5, fontweight='700',
-                                      color='#ef4444' if big else '#64748b')
+                                      color=ucharts.color('risk_high') if big else ucharts.color('reference'))
                 ax_l.set_xticks(range(len(lx)))
-                ax_l.set_xticklabels(lx, color='#c9d1d9', fontsize=7.5)
-                ax_l.set_ylabel("AUC", color='#c9d1d9', fontsize=9)
+                ax_l.set_xticklabels(lx, color=ucharts.color('fg'), fontsize=7.5)
+                ax_l.set_ylabel("AUC", color=ucharts.color('fg'), fontsize=9)
                 ax_l.set_ylim(min(ly) - 0.03, max(ly) + 0.035)
-                ax_l.tick_params(colors='#c9d1d9', labelsize=8)
-                ax_l.grid(True, axis='y', color='#21262d', ls='--', lw=0.5, alpha=0.6)
+                ax_l.tick_params(colors=ucharts.color('fg'), labelsize=8)
+                ax_l.grid(True, axis='y', color=ucharts.color('surface'), ls='--', lw=0.5, alpha=0.6)
                 for sp in ['top', 'right']:   ax_l.spines[sp].set_visible(False)
-                for sp in ['left', 'bottom']: ax_l.spines[sp].set_color('#30363d')
+                for sp in ['left', 'bottom']: ax_l.spines[sp].set_color(ucharts.color('spine'))
                 plt.tight_layout()
                 st.pyplot(fig_l, transparent=True)
                 plt.close()

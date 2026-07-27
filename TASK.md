@@ -1847,3 +1847,159 @@ remit:
   every render site passes through `esc()` — but the input validation is absent.
 - `use_container_width` is deprecated in favour of `width='stretch'` and is used
   throughout. A global sweep belongs in Phase 10, not scattered across six phases.
+
+---
+
+# RUN 11 — Frontend redesign, Phase 7: the chart layer (2026-07-27)
+
+Every matplotlib figure in the application now takes its colour from the token module.
+The goal was not tidiness — it was to make BUG-01/02 structurally impossible rather
+than merely fixed.
+
+## 11.1 — The recon undercounted by a factor of three
+
+Phase 0 reported "39 call sites, 85 hard-coded hexes". The real figure is **38 call
+sites and 268 hexes across 22 distinct colours**, plus 19 named colours the hex search
+could not see at all and 7 built-in colormaps. The recon only counted lines that also
+named a chart function, so every colour held in a list, a tuple or a dict was invisible
+to it.
+
+Recorded because it is the same lesson as BUG-22: a measurement that looks at a
+consequence rather than the cause will under-report.
+
+## 11.2 — What `ui/charts.py` provides
+
+| | |
+|---|---|
+| `color(role)` | one colour by role, resolved against the viewer's theme **at call time** |
+| `palette(theme)` | the whole flat dict, optionally pinned to a named theme |
+| `series_color(name)` | a model's colour, **keyed by name** |
+| `categorical(n)` | the brand ramp for series with no inherent order |
+| `cmap(kind, reverse)` | `sequential` / `risk` / `diverging`, built from the token ramps |
+| `on_color(bg)` | readable ink for text sitting on a filled cell |
+| `figure()` / `style_axes()` / `render()` | themed, transparent, self-disposing |
+
+Three decisions worth recording:
+
+- **`color()` is a function, not a module constant.** The correct value depends on the
+  active theme, which is only knowable during a script run. A constant would freeze
+  whichever theme was active when the process started — which is exactly what happened
+  to `MODEL_COLORS` mid-sweep and is why it was deleted.
+- **An unknown role raises.** A silent fallback produces a chart in the wrong colour
+  with nothing to indicate it, which is the failure the token layer exists to prevent.
+- **Figures are themed at construction, not through `rcParams`.** `rcParams` is
+  process-global and Streamlit reruns per interaction, so a page that mutated it would
+  leak styling into every other page's figures in an order-dependent way.
+
+## 11.3 — The colormaps had to go, and one honest limitation
+
+The pages used `RdYlGn`, `YlOrRd` and `RdBu_r`. All three are off-brand. `RdYlGn` is
+also the worst available choice for clinical work: red-green is the commonest form of
+colour-vision deficiency, so its two endpoints are indistinguishable for roughly one
+man in twelve.
+
+Measured luminance of the replacements:
+
+```
+sequential   0.919 -> 0.175 -> 0.006     monotonic; survives greyscale
+diverging    0.139 -> 0.911 -> 0.137     symmetric, dark-light-dark
+risk         0.195 -> 0.261 -> 0.137     NOT monotonic
+```
+
+The `risk` ramp cannot be made luminance-monotonic inside the Brand Six — the same
+finding recorded for the risk ramp in Phase 1. So it is documented as safe for **band
+identity**, where hue carries a category that is also labelled in text, and wrong for
+**magnitude**, where a reader would infer an ordering the lightness does not support.
+Every magnitude heatmap uses `sequential`. A test pins the non-monotonicity so that
+nobody later "corrects" the documentation.
+
+`pages_ext.py` was also still calling `plt.cm.get_cmap`, removed in matplotlib 3.9 —
+a deprecation waiting to become a crash.
+
+## 11.4 — Three bugs that only rendering could find
+
+No browser automation exists, so the substitute for a screenshot was to drive the Model
+Performance page — which owns 30 of the 38 figures — in both themes, intercept every
+figure at the moment the page disposes of it, and look at them. 71 figures per theme.
+Three defects came out of that which no assertion I had written would have caught:
+
+**The metric charts were painted in risk colours.** Pass 1 mapped five categorical
+metrics (Accuracy, AUC, F1, Precision, Recall) onto five semantic roles, which put
+Accuracy and F1 in near-identical verdigrises *and* implied a clinical reading of a
+metric bar. §3.10 reserves the risk hues for clinical meaning. Now `categorical(5)`.
+
+**The model bar charts reintroduced BUG-19.** Colour was assigned by position in a list
+sorted by AUC, so a model changed colour whenever its ranking changed. Now
+`series_color(name)`, and a test reverses the model list and asserts nothing moves.
+
+**Every confusion matrix had its largest cell dark-on-dark.** The heatmaps chose cell
+text colour from the underlying *value* — `'black' if val > 0.12` — which only worked
+because `RdYlGn` happens to be light at its high end. A ramp that is dark there
+inverted the logic. Replaced with `on_color(cell_colour)`, deciding from the background
+rather than the datum.
+
+## 11.5 — Two bugs in my own verification
+
+**The dark-theme render was not testing the dark theme.** `charts.py` does
+`from .styles import active_theme`, which binds the function *object* at import, so
+patching `ui.styles.active_theme` never reached it. The first two rounds of "verified in
+both themes" rendered the light palette twice. Caught by noticing that dark-theme value
+labels looked dark.
+
+**`on_color`'s threshold was mistuned and the test caught it.** It used
+`luminance > 0.45`, but Ink and Bone cross over at ≈0.18 — so every cell between 0.18
+and 0.45 was given the *worse* of the two options. Measured worst-case contrast across
+the three ramps was 2.00–2.85 against a 3:1 floor. It now measures both candidates and
+takes the better, which cannot be wrong by a mistuned constant. Worst case is now ≥4.1.
+
+## 11.6 — The PDF must never follow the viewer
+
+`waterfall_figure` renders in two places with opposite requirements: on screen it must
+follow the viewer, in the PDF it is printed on white A4. A dark-mode user exporting a
+report would otherwise get near-white ink on a white page — an unreadable file,
+produced silently, that they then hand to someone else.
+
+It now takes a `theme` argument; `app.py` passes `theme="light"` for the PDF copy and
+nothing for the screen. `_pdf_text_page` pins `palette('light')` and never calls
+`color()`. The post-hoc repaint in `build_pdf_report` stays as a backstop for any
+caller that hands over a screen-built figure, with a note that it cannot recover the
+bar colours and the theme argument is the real fix.
+
+## 11.7 — The invariant
+
+The most valuable test in `tests/test_charts.py` reads the page modules as **source**
+and fails if any colour literal — hex or named — sits on a line reaching matplotlib.
+That is the guarantee. Everything else tests the alternative that `ui/charts.py`
+provides; a suite that only exercised `ui/charts.py` would have passed happily while
+`app.py` carried 268 hard-coded hexes, which is the state this phase began in.
+
+`'white'` is permitted on exactly one path — `clinical_ui.py`'s printed A4 page — and
+the test enforces that exception by file.
+
+## 11.8 — Phase 7 gate
+
+```
+27-path AppTest         27/27 routed, 0 exceptions
+py_compile              clean on 14 modules
+pyflakes                no new warnings vs baseline
+test_tokens             0 failures   (63 assertions)
+test_brand              0 failures   (60)
+test_rail               0 failures   (71)
+test_components         0 failures   (95)
+test_login              0 failures   (68)
+test_diagnosis          0 failures   (76)
+test_charts             0 failures   (78)
+figures rendered        71 per theme, light and dark, 0 exceptions
+colour literals reaching matplotlib      0
+screenshots             SUBSTITUTED — see 9.0
+```
+
+## 11.9 — Carried forward
+
+Phases 8–10: dashboards, history, reports and profile; the Model Performance IA
+restructure from 11 tabs to 4 segmented groups; the admin pages with the final
+accessibility, responsive and print passes.
+
+The 389 hexes inside HTML strings are untouched and deliberately so — they belong to
+the pages Phases 8–10 rebuild, and moving them now would have made a Phase 7 regression
+impossible to attribute.
