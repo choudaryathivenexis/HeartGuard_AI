@@ -1321,78 +1321,162 @@ def _overall_auc(model_label):
 # PREDICTION HISTORY PAGE
 # ══════════════════════════════════════════════════════════════════
 def page_history(user):
-    section_header("", "Prediction History",
-                   "Recorded cardiovascular risk assessments and diagnostic logs")
+    """
+    §7.6's CRUD pattern: page_header → filter bar → data_table.
+
+    Row-level scoping is unchanged: a Doctor sees only their own assessments, everyone
+    else sees all. That is enforced by the `user_id` argument, not by a UI filter, and
+    the filter bar below can only narrow what the query already returned.
+
+    "Confidence" was the wrong word for the probability column and is now "Risk
+    estimate". A calibrated probability is not the model's confidence in itself — 0.62
+    means roughly 62 in 100 such patients have the outcome, not that the model is 62%
+    sure. The old label invited exactly the misreading §3.10 forbids.
+    """
+    uic.page_header("Prediction history",
+                    "Every recorded assessment, with the model and operating point "
+                    "that produced it.")
 
     uid = user['id'] if user['role'] == 'Doctor' else None
     data = auth_db.get_predictions(user_id=uid)
 
     if not data:
-        st.markdown('<div class="alert-info">No prediction records found in the system.</div>',
-                    unsafe_allow_html=True)
+        uic.empty_state(
+            "No assessments recorded",
+            "Open Heart Disease Prediction and run one. Saved assessments appear here "
+            "with their model version, threshold and risk band."
+            if user['role'] == 'Doctor' else
+            "No assessment has been saved by any user yet.")
         return
 
     df = pd.DataFrame(data)
-    df['Risk'] = df['predicted_class'].apply(lambda x: "High Risk" if x == 1 else "Low Risk")
-    df['Confidence'] = df['probability'].apply(lambda x: f"{x:.1%}")
+    df['Band'] = df.apply(
+        lambda r: r.get('risk_band') or ("Flagged" if r['predicted_class'] == 1
+                                         else "Below threshold"), axis=1)
+    df['Estimate'] = df['probability'].apply(fmt.pct)
+    # BUG-23's flag is persisted per row; surfacing it here is the whole point of
+    # having stored it. A historical score taken outside the training envelope must
+    # stay marked as one for as long as the record exists.
+    if 'extrapolated' in df.columns:
+        df['Applicability'] = df['extrapolated'].apply(
+            lambda x: "Extrapolated" if x else "In envelope")
 
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        search = st.text_input("Search patient / model", "")
-    with c2:
-        verdict_f = st.selectbox("Filter by Verdict", ["All", "High Risk", "Low Risk"])
-    with c3:
-        model_f = st.selectbox("Filter by Model", ["All"] + sorted(df['model_used'].unique().tolist()))
+    with uic.panel("Filter"):
+        c1, c2, c3 = st.columns([2, 1, 1])
+        with c1:
+            search = st.text_input("Search patient or model", "",
+                                   key="hist_search", label_visibility="collapsed",
+                                   placeholder="Search patient or model")
+        with c2:
+            verdict_f = st.selectbox("Verdict", ["All", "Flagged", "Below threshold"],
+                                     key="hist_verdict")
+        with c3:
+            model_f = st.selectbox(
+                "Model", ["All"] + sorted(df['model_used'].dropna().unique().tolist()),
+                key="hist_model")
 
     fdf = df.copy()
     if search:
-        fdf = fdf[fdf.apply(lambda r: search.lower() in str(r.get('patient_name', '')).lower()
-                            or search.lower() in str(r['model_used']).lower(), axis=1)]
-    if verdict_f == "High Risk":
+        needle = search.lower()
+        fdf = fdf[fdf.apply(
+            lambda r: needle in str(r.get('patient_name', '')).lower()
+            or needle in str(r['model_used']).lower(), axis=1)]
+    if verdict_f == "Flagged":
         fdf = fdf[fdf['predicted_class'] == 1]
-    elif verdict_f == "Low Risk":
+    elif verdict_f == "Below threshold":
         fdf = fdf[fdf['predicted_class'] == 0]
     if model_f != "All":
         fdf = fdf[fdf['model_used'] == model_f]
 
-    cols = ['timestamp', 'patient_name', 'age', 'gender', 'Risk', 'Confidence', 'model_used']
+    cols = ['timestamp', 'patient_name', 'age', 'gender', 'Band', 'Estimate',
+            'model_used']
+    if 'Applicability' in fdf.columns:
+        cols.append('Applicability')
     if user['role'] != 'Doctor' and 'doctor_name' in fdf.columns:
         cols.insert(2, 'doctor_name')
 
-    st.dataframe(fdf[cols].rename(columns={
-        'timestamp': 'Date', 'patient_name': 'Patient', 'age': 'Age',
-        'gender': 'Gender', 'model_used': 'Model', 'doctor_name': 'Doctor'
-    }), hide_index=True, use_container_width=True)
+    st.caption(f"{fmt.count(len(fdf))} of {fmt.count(len(df))} assessments")
+    if fdf.empty:
+        uic.empty_state("Nothing matches these filters",
+                        "Clear the search box or set the verdict and model back to All.")
+        return
 
-    csv = fdf.to_csv(index=False).encode()
-    st.download_button("Export as CSV", csv,
+    uic.data_table(fdf[cols].rename(columns={
+        'timestamp': 'Date', 'patient_name': 'Patient', 'age': 'Age',
+        'gender': 'Gender', 'model_used': 'Model', 'doctor_name': 'Doctor'}))
+
+    st.download_button("Export filtered rows (.csv)", fdf.to_csv(index=False).encode(),
                        f"predictions_{datetime.now().strftime('%Y%m%d')}.csv",
-                       "text/csv", use_container_width=True)
+                       "text/csv", key="hist_csv")
 
 
 # ══════════════════════════════════════════════════════════════════
 # PROFILE PAGE
 # ══════════════════════════════════════════════════════════════════
 def page_profile(user):
-    section_header("", "Profile Settings", "Manage your account information and credentials")
+    """
+    §7.2's inline-validation pattern, reused: errors beneath the field they concern.
 
-    with st.form("profile_form"):
-        new_full = st.text_input("Full Name", value=user['fullname'])
-        new_email = st.text_input("Email", value=user['email'])
-        new_spec = st.text_input("Specialisation", value=user.get('specialisation', ''))
-        new_pw = st.text_input("New Password (leave blank to keep current)", type="password")
-        s = st.form_submit_button("Save Changes", use_container_width=True)
-        if s:
-            if new_full and new_email:
-                auth_db.update_user_profile(user['id'], new_full, new_email, new_spec,
-                                            new_pw if new_pw else None)
-                st.session_state.user['fullname'] = new_full
-                st.session_state.user['email'] = new_email
-                st.success("Profile updated successfully!")
-                time.sleep(0.8)
-                st.rerun()
-            else:
-                st.error("Name and Email are required.")
+    Identity is shown read-only above the form. Username and role are not editable
+    here by design — self-service role change is BUG-09, and it is worth stating on the
+    page why the field a user might look for is absent.
+    """
+    uic.page_header("Profile", "Your account details and password.")
+
+    left, right = st.columns([3, 2], gap="large")
+
+    with left:
+        err = st.session_state.get("profile_err", {})
+        ok = st.session_state.pop("profile_ok", False)
+        with uic.panel("Account"):
+            if ok:
+                uic.alert("success", "Profile updated",
+                          "Your changes have been saved.")
+            with st.form("profile_form"):
+                new_full = st.text_input("Full name", value=user['fullname'])
+                ui_login.inline_error(err.get("fullname"))
+                new_email = st.text_input("Email", value=user['email'])
+                ui_login.inline_error(err.get("email"))
+                new_spec = st.text_input("Specialisation",
+                                         value=user.get('specialisation', ''))
+                new_pw = st.text_input("New password", type="password",
+                                       placeholder="Leave blank to keep the current one")
+                ui_login.inline_error(err.get("password"))
+                saved = st.form_submit_button("Save changes", type="primary",
+                                             use_container_width=True)
+                if saved:
+                    e = {}
+                    if not new_full:
+                        e["fullname"] = "Enter your full name."
+                    if not new_email:
+                        e["email"] = "Enter an email address."
+                    # Matches the registration rule. A profile form that accepts a
+                    # 3-character password silently undoes the minimum enforced at
+                    # sign-up.
+                    if new_pw and len(new_pw) < 6:
+                        e["password"] = "Use at least 6 characters, or leave it blank."
+                    if not e:
+                        auth_db.update_user_profile(
+                            user['id'], new_full, new_email, new_spec,
+                            new_pw if new_pw else None)
+                        st.session_state.user['fullname'] = new_full
+                        st.session_state.user['email'] = new_email
+                        st.session_state.user['specialisation'] = new_spec
+                        st.session_state.profile_ok = True
+                    st.session_state.profile_err = e
+                    st.rerun()
+
+    with right:
+        with uic.panel("Identity"):
+            st.markdown(
+                '<div class="hg-result-id">'
+                + uic.identifier(user['username'], "Username")
+                + uic.identifier(user['role'], "Role")
+                + '</div>', unsafe_allow_html=True)
+            st.caption(
+                "Username and role are not editable here. Role changes are made by a "
+                "SuperAdmin through Role & Permission Management — self-service "
+                "elevation was a real vulnerability in an earlier version.")
 
 
 # ══════════════════════════════════════════════════════════════════

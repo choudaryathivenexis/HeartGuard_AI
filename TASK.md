@@ -2003,3 +2003,112 @@ accessibility, responsive and print passes.
 The 389 hexes inside HTML strings are untouched and deliberately so — they belong to
 the pages Phases 8–10 rebuild, and moving them now would have made a Phase 7 regression
 impossible to attribute.
+
+---
+
+# RUN 12 — Frontend redesign, Phase 8: dashboards, history, reports, profile (2026-07-27)
+
+Four pages moved onto the component library. §7.4 is explicit that role-aware **content**
+stays exactly as it is — same figures, same roles, same queries — and only the
+presentation changes. That constraint held: no query, no scoping rule and no role gate
+was touched.
+
+## 12.1 — The KPI cards are gone
+
+They were gradient-filled, six different hues, each with its own border colour, and they
+read as six detached objects competing for attention. `stat_grid` renders the same
+numbers hairline-separated on one surface, so the strip reads as a single instrument
+panel. §3.5 prefers hairlines to shadows precisely because a dashboard where every tile
+floats looks like a template.
+
+**Tone is now applied only where a figure carries clinical meaning** — the flagged and
+below-threshold counts. User counts, doctor counts and model counts take no tone,
+because colouring an inventory number the same crimson as a clinical finding is what
+makes a dashboard unreadable at a glance. The old cards coloured all six.
+
+19 of the original 35 KPI call sites are converted. The remaining 16 belong to the admin
+and management pages, which Phase 10 rebuilds; the `.kpi-*` rules stay in the legacy
+shim until then.
+
+## 12.2 — Three labels that were making claims the numbers cannot support
+
+| Was | Now | Why |
+|---|---|---|
+| "Confidence: 62.0%" | "Risk estimate" | A calibrated probability is not the model's confidence in itself. 0.62 means roughly 62 in 100 such patients have the outcome, not that the model is 62% sure — the old label invited exactly the misreading §3.10 forbids. |
+| "Avg Risk Score" | "Mean risk estimate", hinted *cohort mean, not one patient's score* | The mean of a set of probabilities belongs to nobody. Calling it a score invites reading it as a cohort verdict. |
+| "High Risk" / "Low Risk" as row verdicts | "Flagged" / "Below threshold" | §3.10's fixed vocabulary. A row saying "Low Risk" reads as reassurance; the threshold is tuned for screening sensitivity and misses roughly one diseased patient in seven. |
+
+## 12.3 — The persisted extrapolation flag now surfaces in history
+
+`predictions.extrapolated` has been stored since Run 7 and displayed nowhere outside the
+diagnosis page. Prediction History now carries an **Applicability** column reading
+"Extrapolated" or "In envelope".
+
+This is the whole point of having stored it. A historical score taken outside the
+training envelope must stay marked as one for as long as the record exists — otherwise
+the caveat lives only in the session that produced it, and the row that outlives it
+looks exactly like a valid one.
+
+## 12.4 — Empty states name an action
+
+§7.4: never "No data available". Every empty state on these four pages now says what to
+do next — open Heart Disease Prediction, widen the date range, clear the filters, ask a
+SuperAdmin to train. The filtered-to-nothing case is distinguished from the
+nothing-exists case, because they need different actions.
+
+## 12.5 — A component that shipped broken and was never once called
+
+`data_table` forwarded `height=None` to `st.dataframe`, which rejects it outright with
+`StreamlitInvalidHeightError` — it wants a positive integer, `'stretch'`, `'content'`,
+or the argument absent. So the component **raised on every call a page would naturally
+make**, and it had been in the library since Phase 4.
+
+It survived because the Phase 4 test suite only ever exercised `static_table`.
+`data_table` was exported, documented, and never invoked. A library test that skips an
+export is not a library test.
+
+Fixed by building the kwargs conditionally, and — more importantly — the component suite
+now drives **every one of the 16 public exports through AppTest with its default
+arguments**, and separately asserts that nothing is exported without appearing in that
+list. That second assertion is what stops the same gap reopening. It immediately found a
+second arity error in the test itself (`footer_meta` takes three arguments, not two).
+
+## 12.6 — Profile
+
+Rebuilt on §7.2's inline-validation pattern: errors beneath the field they concern,
+carried in session state so they survive the rerun. The password minimum now matches
+registration's — a profile form that accepts a 3-character password silently undoes the
+rule enforced at sign-up.
+
+Username and role are shown read-only beside the form, with a caption saying why they
+are not editable there: self-service role elevation was BUG-09, a real vulnerability
+that two accounts in the live database had already exploited. Stating the reason is
+better than leaving a user hunting for a field that was deliberately removed.
+
+## 12.7 — Phase 8 gate
+
+```
+27-path AppTest         27/27 routed, 0 exceptions
+py_compile              clean on 14 modules
+pyflakes                no new warnings vs baseline
+test_tokens             0 failures   (63 assertions)
+test_brand              0 failures   (60)
+test_rail               0 failures   (71)
+test_components         0 failures   (98 — +3 smoke assertions)
+test_login              0 failures   (68)
+test_diagnosis          0 failures   (76)
+test_charts             0 failures   (78)
+CSS budget              46.3 KB / 60 KB   emotion-cache selectors: 0
+KPI cards on the four rebuilt pages       0
+screenshots             SUBSTITUTED — see 9.0
+```
+
+## 12.8 — Carried forward
+
+Phase 9: the Model Performance IA restructure — eleven horizontal tabs into four
+segmented groups — plus rendering the bootstrap CIs in the metric table.
+
+Phase 10: the admin and management pages (16 remaining KPI call sites, the typed-
+confirmation pattern for destructive actions, the Activity Logs danger zone), the
+accessibility audit against §8, responsive verification at 1440/1280/1024/768, the print
+stylesheet, and the `use_container_width` → `width='stretch'` sweep.

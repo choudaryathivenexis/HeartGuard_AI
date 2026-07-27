@@ -290,6 +290,62 @@ found = {m.upper() for m in re.findall(r"#[0-9A-Fa-f]{6}", all_html)}
 check("no hex outside the token module", not (found - allowed), str(found - allowed))
 check("components reference CSS custom properties", "var(--hg-" in all_html)
 
+# ════════════════════════════════════════════════════════════════════════
+print("\n=== smoke: every export is callable with its DEFAULT arguments ===")
+# Added in Phase 8 after `data_table` was found to raise on every call a page would
+# naturally make: it forwarded `height=None`, which Streamlit rejects outright. The
+# component shipped in Phase 4 exported, documented and NEVER ONCE INVOKED — the suite
+# above only exercised `static_table`. A library test that skips an export is not a
+# library test, so this drives every public name through AppTest with its defaults.
+import pandas as pd
+from streamlit.testing.v1 import AppTest
+
+SMOKE = {
+    "eyebrow": ('C.eyebrow("x")', "str"),
+    "chip": ('C.chip("x")', "str"),
+    "identifier": ('C.identifier("v")', "str"),
+    "page_header": ('C.page_header("t")', "render"),
+    "section": ('C.section("t")', "render"),
+    "panel": ('_ = [None for _ in [0]]\nwith C.panel("t"):\n    pass', "render"),
+    "footer_meta": ('C.footer_meta("a", "b", "c")', "render"),
+    "empty_state": ('C.empty_state("t", "b")', "render"),
+    "stat": ('C.stat("l", "v")', "str"),
+    "stat_grid": ('C.stat_grid([{"label": "l", "value": "v"}])', "render"),
+    "alert": ('C.alert("info", "t")', "render"),
+    "risk_verdict": ('C.risk_verdict(0.4, "LOW", "low", (0.2, 0.3, 0.6), 0.3, "a")',
+                     "render"),
+    "operating_point": ('C.operating_point(0.3, 0.8, 0.5)', "render"),
+    "reliability_panel": ('C.reliability_panel(0.8, 0.7, 0.9, 0.0, 10)', "render"),
+    "data_table": ('C.data_table(pd.DataFrame({"a": [1, 2]}))', "render"),
+    "static_table": ('C.static_table(["a"], [["1"]])', "render"),
+}
+
+script_lines = [
+    "import pandas as pd",
+    "import sys, os",
+    f"sys.path.insert(0, {os.path.dirname(os.path.dirname(os.path.abspath(__file__)))!r})",
+    "from ui import components as C",
+    "import streamlit as st",
+]
+for name, (call, _kind) in SMOKE.items():
+    script_lines.append(f"st.text({name!r})")
+    for ln in call.split("\n"):
+        script_lines.append(ln)
+smoke_at = AppTest.from_string("\n".join(script_lines), default_timeout=120).run()
+check("every export runs with default arguments", not smoke_at.exception,
+      "; ".join(e.value[:200] for e in smoke_at.exception))
+reached = [t.value for t in smoke_at.text]
+check(f"all {len(SMOKE)} exports reached", len(reached) == len(SMOKE),
+      f"stopped after {reached[-1] if reached else 'nothing'}")
+
+# And nothing may be exported without appearing above.
+public = {n for n in C.__all__} if hasattr(C, "__all__") else set()
+if public:
+    untested = public - set(SMOKE) - {"NAV_GROUPS", "nav_groups_for", "sidebar_nav",
+                                      "sidebar_footer", "CLINICAL_TONES",
+                                      "SEMANTIC_TONES"}
+    check("no export is left untested", not untested, str(untested))
+
 print("\n" + "=" * 66)
 print(f"FAILURES: {len(FAILURES)}")
 for f in FAILURES:

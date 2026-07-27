@@ -456,9 +456,23 @@ def data_table(df, column_config: dict | None = None, height: int | None = None,
     `st.dataframe` renders to a canvas grid that CSS barely reaches, so `column_config`
     is the supported route for formatting and alignment — not hand-built HTML. A
     13,000-row hand-built table would be a performance disaster and is never the answer.
+
+    FIXED in Phase 8: `height` was being forwarded unconditionally, and Streamlit
+    rejects `height=None` with `StreamlitInvalidHeightError` — it wants a positive
+    integer, 'stretch', 'content', or the argument absent. So this component raised on
+    every call that did not pass an explicit height, i.e. every call a page would
+    naturally make. It shipped in Phase 4 because the component test only ever
+    exercised `static_table`; `data_table` was exported, documented, and never once
+    invoked. A component library needs its smoke test to call EVERY export with its
+    default arguments — that is now asserted.
     """
-    st.dataframe(df, column_config=column_config or None, hide_index=True,
-                 use_container_width=True, height=height, key=key)
+    kwargs = {"column_config": column_config or None, "hide_index": True,
+              "use_container_width": True}
+    if height is not None:
+        kwargs["height"] = height
+    if key is not None:
+        kwargs["key"] = key
+    st.dataframe(df, **kwargs)
 
 
 def static_table(cols: list[str], rows: list[list], highlight: int | None = None,

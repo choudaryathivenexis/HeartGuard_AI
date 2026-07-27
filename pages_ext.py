@@ -10,6 +10,8 @@ from datetime import datetime, date
 import auth_db
 import feature_engineering as fe
 from ui import charts as ucharts
+from ui import components as uic
+from ui import format as fmt
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODELS_DIR = os.path.join(BASE_DIR, "models")
@@ -57,8 +59,22 @@ def _section_header(title, subtitle=""):
 # SHARED — DASHBOARD (role-aware)
 # ══════════════════════════════════════════════════════════════════
 def page_dashboard(user):
+    """
+    §7.4. Role-aware CONTENT is unchanged — the same figures, for the same roles, from
+    the same queries. Only the presentation moved.
+
+    The KPI cards are gone. They were gradient-filled, six different hues, each with its
+    own border colour, and they read as six detached objects competing for attention.
+    `stat_grid` renders the same numbers hairline-separated on one surface, so the strip
+    reads as a single instrument panel — §3.5 prefers hairlines to shadows precisely
+    because a dashboard where every tile floats looks like a template.
+
+    Tone is applied only where a figure carries clinical meaning: high-risk and low-risk
+    counts. User and model counts take no tone, because colouring an inventory number
+    the same red as a clinical finding is what makes a dashboard unreadable at a glance.
+    """
     role = user['role']
-    _section_header("Dashboard", f"Welcome back, {user['fullname']}")
+    uic.page_header("Dashboard", f"Signed in as {user['fullname']} · {role}")
 
     all_users = auth_db.get_all_users()
     all_preds = auth_db.get_predictions(
@@ -69,46 +85,51 @@ def page_dashboard(user):
     risk_c = sum(1 for p in all_preds if p['predicted_class'] == 1)
     safe_c = len(all_preds) - risk_c
     doctors = sum(1 for u in all_users if u['role'] == 'Doctor')
+    flagged_rate = (risk_c / len(all_preds)) if all_preds else 0.0
 
     if role == 'Doctor':
-        my_total = len(all_preds)
-        st.markdown('<div class="kpi-wrap">' +
-                    _kpi(my_total, "My Total Scans", "#ef4444", "linear-gradient(135deg,#fee2e2,#fecdd3)", "#fca5a5") +
-                    _kpi(risk_c, "High Risk", "#dc2626", "linear-gradient(135deg,#fff1f2,#fee2e2)", "#ef4444") +
-                    _kpi(safe_c, "Low Risk", "#16a34a", "linear-gradient(135deg,#f0fdf4,#dcfce7)", "#86efac") +
-                    _kpi(sum(cfg.values()), "Active AI Models", "#7c3aed", "linear-gradient(135deg,#f5f3ff,#ede9fe)", "#c4b5fd") +
-                    '</div>', unsafe_allow_html=True)
+        uic.stat_grid([
+            {"label": "My assessments", "value": fmt.count(len(all_preds))},
+            {"label": "Flagged for follow-up", "value": fmt.count(risk_c),
+             "tone": "high", "hint": f"{fmt.pct(flagged_rate)} of assessments"},
+            {"label": "Below threshold", "value": fmt.count(safe_c), "tone": "low"},
+            {"label": "Active models", "value": fmt.count(sum(cfg.values()))},
+        ])
     else:
-        admins = sum(1 for u in all_users if u['role'] == 'Admin')
-        st.markdown('<div class="kpi-wrap">' +
-                    _kpi(len(all_preds), "Total Predictions", "#ef4444", "linear-gradient(135deg,#fee2e2,#fecdd3)", "#fca5a5") +
-                    _kpi(risk_c, "High Risk Cases", "#dc2626", "linear-gradient(135deg,#fff1f2,#fee2e2)", "#ef4444") +
-                    _kpi(safe_c, "Low Risk Cases", "#16a34a", "linear-gradient(135deg,#f0fdf4,#dcfce7)", "#86efac") +
-                    _kpi(len(all_users), "Total Users", "#2563eb", "linear-gradient(135deg,#eff6ff,#dbeafe)", "#93c5fd") +
-                    _kpi(doctors, "Doctors", "#0891b2", "linear-gradient(135deg,#ecfeff,#cffafe)", "#67e8f9") +
-                    _kpi(sum(cfg.values()), "Active Models", "#7c3aed", "linear-gradient(135deg,#f5f3ff,#ede9fe)", "#c4b5fd") +
-                    '</div>', unsafe_allow_html=True)
+        uic.stat_grid([
+            {"label": "Assessments", "value": fmt.count(len(all_preds))},
+            {"label": "Flagged for follow-up", "value": fmt.count(risk_c),
+             "tone": "high", "hint": f"{fmt.pct(flagged_rate)} of assessments"},
+            {"label": "Below threshold", "value": fmt.count(safe_c), "tone": "low"},
+            {"label": "Users", "value": fmt.count(len(all_users))},
+            {"label": "Doctors", "value": fmt.count(doctors)},
+            {"label": "Active models", "value": fmt.count(sum(cfg.values()))},
+        ], cols=6)
 
-    st.markdown("---")
     col1, col2 = st.columns(2)
 
     with col1:
-        st.markdown("#### Recent Predictions")
+        uic.section("Recent assessments")
         if all_preds:
             pdf = pd.DataFrame(all_preds[:10])
-            pdf['Risk'] = pdf['predicted_class'].apply(lambda x: "High" if x == 1 else "Low")
-            pdf['Prob'] = pdf['probability'].apply(lambda x: f"{x:.1%}")
+            pdf['Risk'] = pdf['predicted_class'].apply(
+                lambda x: "Flagged" if x == 1 else "Below threshold")
+            pdf['Prob'] = pdf['probability'].apply(fmt.pct)
             cols = ['timestamp', 'age', 'Risk', 'Prob', 'model_used']
             if role != 'Doctor' and 'doctor_name' in pdf.columns:
                 cols.insert(1, 'doctor_name')
-            st.dataframe(pdf[cols].rename(columns={
-                'timestamp': 'Time', 'age': 'Age', 'model_used': 'Model', 'doctor_name': 'Doctor'
-            }), hide_index=True, use_container_width=True)
+            uic.data_table(pdf[cols].rename(columns={
+                'timestamp': 'Time', 'age': 'Age', 'model_used': 'Model',
+                'doctor_name': 'Doctor'}))
         else:
-            st.markdown('<div class="alert-info">No predictions yet.</div>', unsafe_allow_html=True)
+            # §7.4: never "No data available". An empty state names the next action.
+            uic.empty_state(
+                "No assessments recorded yet",
+                "Open Heart Disease Prediction, enter a patient's indicators and run an "
+                "assessment. Results appear here as they are saved.")
 
     with col2:
-        st.markdown("#### Model Performance")
+        uic.section("Model discrimination")
         if results:
             fig, ax = plt.subplots(figsize=(5, 3.2), facecolor='none')
             ax.set_facecolor('none')
@@ -129,20 +150,24 @@ def page_dashboard(user):
                             xy=(bar.get_x() + bar.get_width() / 2, bar.get_height()),
                             xytext=(0, 3), textcoords="offset points",
                             ha='center', color=ucharts.color('axis'), fontsize=7, fontweight='600')
-            plt.tight_layout()
-            st.pyplot(fig, transparent=True)
-            plt.close()
+            ucharts.render(fig)
         else:
-            st.markdown('<div class="alert-info">No model results yet. Train models first.</div>',
-                        unsafe_allow_html=True)
+            uic.empty_state(
+                "No trained models",
+                "A SuperAdmin can run training from ML Model Management. Until then no "
+                "assessment can be scored.")
 
     if role != 'Doctor':
-        st.markdown("---")
-        st.markdown("#### Recent System Activity")
+        uic.section("Recent system activity")
         logs = auth_db.get_system_logs(8)
         if logs:
             ldf = pd.DataFrame(logs)[['timestamp', 'username', 'action', 'details']]
-            st.dataframe(ldf, hide_index=True, use_container_width=True)
+            uic.data_table(ldf.rename(columns={
+                'timestamp': 'Time', 'username': 'User', 'action': 'Action',
+                'details': 'Detail'}))
+        else:
+            uic.empty_state("No activity recorded",
+                            "Actions are logged here as users sign in and work.")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -216,17 +241,25 @@ def page_patient_management(user):
 # DOCTOR — REPORTS
 # ══════════════════════════════════════════════════════════════════
 def page_reports(user):
-    _section_header("Reports", "Generate and export clinical summary reports")
+    """
+    §7.4 applied to the report builder: the same four figures, as a stat strip.
+
+    "Avg Risk Score" is now labelled "Mean risk estimate". The mean of a set of
+    probabilities is not a risk score belonging to anyone, and calling it one invites
+    reading it as a cohort verdict. The label says what the number is.
+    """
+    uic.page_header("Reports",
+                    "Aggregate a period into a summary a colleague can read.")
 
     preds = auth_db.get_predictions(user_id=user['id'] if user['role'] == 'Doctor' else None)
     df = pd.DataFrame(preds) if preds else pd.DataFrame()
 
-    st.markdown("#### Summary Report Generator")
-    col1, col2 = st.columns(2)
-    with col1:
-        date_from = st.date_input("From Date", value=date(2024, 1, 1))
-    with col2:
-        date_to = st.date_input("To Date", value=date.today())
+    with uic.panel("Period"):
+        col1, col2 = st.columns(2)
+        with col1:
+            date_from = st.date_input("From", value=date(2024, 1, 1))
+        with col2:
+            date_to = st.date_input("To", value=date.today())
 
     if not df.empty:
         df['date'] = pd.to_datetime(df['timestamp']).dt.date
@@ -240,16 +273,23 @@ def page_reports(user):
     low = total - high
     avg_p = rdf['probability'].mean() if not rdf.empty else 0
 
-    st.markdown('<div class="kpi-wrap">' +
-                _kpi(total, "Scans in Period", "#ef4444", "linear-gradient(135deg,#fee2e2,#fecdd3)", "#fca5a5") +
-                _kpi(high, "High Risk", "#dc2626", "linear-gradient(135deg,#fff1f2,#fee2e2)", "#ef4444") +
-                _kpi(low, "Low Risk", "#16a34a", "linear-gradient(135deg,#f0fdf4,#dcfce7)", "#86efac") +
-                _kpi(f"{avg_p:.1%}", "Avg Risk Score", "#7c3aed", "linear-gradient(135deg,#f5f3ff,#ede9fe)", "#c4b5fd") +
-                '</div>', unsafe_allow_html=True)
+    uic.stat_grid([
+        {"label": "Assessments in period", "value": fmt.count(total)},
+        {"label": "Flagged for follow-up", "value": fmt.count(high), "tone": "high",
+         "hint": f"{fmt.pct(high / total)} of the period" if total else None},
+        {"label": "Below threshold", "value": fmt.count(low), "tone": "low"},
+        {"label": "Mean risk estimate", "value": fmt.pct(avg_p),
+         "hint": "cohort mean, not one patient's score"},
+    ])
+
+    if rdf.empty:
+        uic.empty_state(
+            "No assessments in this period",
+            "Widen the date range, or run an assessment from Heart Disease Prediction. "
+            "The summary below will still download, reporting zero.")
 
     if not rdf.empty:
-        st.markdown("---")
-        st.markdown("#### Risk Trend")
+        uic.section("Assessment volume and flagged cases")
         daily = rdf.groupby('date')['predicted_class'].agg(['sum', 'count']).reset_index()
         daily.columns = ['date', 'high', 'total']
 
@@ -267,12 +307,12 @@ def page_reports(user):
             ax.spines[sp].set_visible(False)
         for sp in ['left', 'bottom']:
             ax.spines[sp].set_color(ucharts.color('spine'))
-        ax.legend(facecolor=ucharts.color('surface'), fontsize=8)
-        plt.tight_layout()
-        st.pyplot(fig, transparent=True)
-        plt.close()
+        ax.legend(facecolor=ucharts.color('surface'),
+                  labelcolor=ucharts.color('fg'), edgecolor=ucharts.color('spine'),
+                  fontsize=8)
+        ucharts.render(fig)
 
-    st.markdown("---")
+    uic.section("Export")
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     report_txt = f"""============================================================
 HEARTGUARD AI - CLINICAL SUMMARY REPORT
@@ -300,15 +340,22 @@ MODEL USAGE BREAKDOWN:
     report_txt += "Final diagnosis must be confirmed by a licensed medical professional.\n"
     report_txt += "=" * 60
 
-    st.download_button("Download Summary Report (.txt)", report_txt,
-                       f"report_{datetime.now().strftime('%Y%m%d%H%M%S')}.txt",
-                       "text/plain", use_container_width=True)
-
-    if not rdf.empty:
-        csv = rdf.to_csv(index=False).encode()
-        st.download_button("Export Raw Data (.csv)", csv,
-                           f"raw_{datetime.now().strftime('%Y%m%d')}.csv",
-                           "text/csv", use_container_width=True)
+    # Side by side, secondary tone: neither export is the page's primary action, and
+    # stacking two full-width buttons makes the second look like a consequence of the
+    # first.
+    d1, d2 = st.columns(2)
+    with d1:
+        st.download_button("Download summary (.txt)", report_txt,
+                           f"report_{datetime.now().strftime('%Y%m%d%H%M%S')}.txt",
+                           "text/plain", use_container_width=True)
+    with d2:
+        if rdf.empty:
+            st.button("Export rows (.csv)", disabled=True, use_container_width=True,
+                      help="No rows in this period.")
+        else:
+            st.download_button("Export rows (.csv)", rdf.to_csv(index=False).encode(),
+                               f"raw_{datetime.now().strftime('%Y%m%d')}.csv",
+                               "text/csv", use_container_width=True)
 
 
 # ══════════════════════════════════════════════════════════════════
