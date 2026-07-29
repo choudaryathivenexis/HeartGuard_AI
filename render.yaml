@@ -50,9 +50,18 @@ services:
       - key: HEARTGUARD_SECRET_KEY
         generateValue: true
 
+      # Render proxies to the app, so its forwarded headers are trustworthy. WITHOUT
+      # this, request.remote_addr is Render's proxy address for every visitor, and the
+      # login rate limiter - keyed on (ip, username) - lets an attacker guessing at
+      # `admin` lock out the real administrator. Only ever set where something you
+      # control terminates the connection: trusting these headers with no proxy in
+      # front lets a client pick a fresh identity per attempt and evade the limiter.
+      - key: HEARTGUARD_TRUST_PROXY
+        value: "1"
+
       # Render terminates TLS, so the session cookie can carry the Secure flag. Setting
-      # this on a plain-HTTP host would stop the browser returning the cookie at all
-      # and nobody could sign in.
+      # this on a plain-HTTP host would stop the browser returning the cookie at all and
+      # nobody could sign in.
       - key: HEARTGUARD_HTTPS
         value: "1"
 

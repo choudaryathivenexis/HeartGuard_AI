@@ -373,6 +373,80 @@ if admin_probe:
               b"Dashboard" in r.data, "a real account was collaterally locked out")
 
 
+# ════════════════════════════════════════════════════════════════════════
+print("\n=== 14. proxy headers are trusted only when configured ===")
+# Behind a reverse proxy `request.remote_addr` is the PROXY's address, identical for
+# every visitor. The rate limiter keys on (ip, username), so with a constant ip an
+# attacker guessing at `admin` locks out the real administrator — the limiter becomes a
+# denial-of-service tool aimed at real accounts. ProxyFix restores the true client
+# address, but must NOT be on without a proxy in front, or a client sets its own
+# X-Forwarded-For and gets a fresh identity per attempt.
+import importlib
+
+
+def _app_with(**env):
+    for key in ("HEARTGUARD_TRUST_PROXY", "HEARTGUARD_HTTPS"):
+        os.environ.pop(key, None)
+    os.environ.update(env)
+    for name in [n for n in list(sys.modules)
+                 if n.startswith(("backend", "frontend", "shared"))]:
+        del sys.modules[name]
+    module = importlib.import_module("backend")
+    return module.create_app({"TESTING": True})
+
+
+def _observe(app):
+    seen = {}
+
+    @app.before_request
+    def _capture():
+        from flask import request as rq
+        seen["ip"] = rq.remote_addr
+        seen["scheme"] = rq.scheme
+
+    with app.test_client() as client:
+        client.get("/login", headers={"X-Forwarded-For": "203.0.113.9",
+                                      "X-Forwarded-Proto": "https"})
+    return seen
+
+
+untrusted = _observe(_app_with())
+check("a spoofed X-Forwarded-For is ignored by default",
+      untrusted["ip"] != "203.0.113.9", untrusted["ip"])
+check("the scheme is not taken from a header by default",
+      untrusted["scheme"] == "http", untrusted["scheme"])
+
+trusted = _observe(_app_with(HEARTGUARD_TRUST_PROXY="1"))
+check("with a trusted proxy the real client address is used",
+      trusted["ip"] == "203.0.113.9", trusted["ip"])
+check("with a trusted proxy https is detected",
+      trusted["scheme"] == "https", trusted["scheme"])
+
+
+# ════════════════════════════════════════════════════════════════════════
+print("\n=== 15. a Secure cookie on plain HTTP explains itself ===")
+# This misconfiguration breaks every sign-in and looks nothing like its cause: the
+# browser accepts the cookie and refuses to return it, so the server never sees a
+# session and the CSRF check fails on every request. It is what happens when the
+# container image is run locally over http.
+secure_app = _app_with(HEARTGUARD_HTTPS="1")
+check("HEARTGUARD_HTTPS sets the Secure flag",
+      secure_app.config.get("SESSION_COOKIE_SECURE") is True)
+with secure_app.test_client() as c:
+    r = c.post("/login", data={"username": "admin", "password": "admin123"})
+    text = r.data.decode("utf-8", "replace")
+    check("sign-in over plain HTTP is refused", r.status_code == 400,
+          str(r.status_code))
+    check("the message names the Secure cookie as the cause",
+          "marked Secure" in text)
+    check("it does not blame an expired session",
+          "session expired" not in text)
+
+# Restore a clean environment for anything that runs after this.
+for key in ("HEARTGUARD_TRUST_PROXY", "HEARTGUARD_HTTPS"):
+    os.environ.pop(key, None)
+
+
 # ── cleanup ─────────────────────────────────────────────────────────────
 for pred in db.get_predictions():
     if pred.get("patient_name") == "Sec Patient A":

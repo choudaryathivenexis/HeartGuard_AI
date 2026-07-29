@@ -56,6 +56,32 @@ def _submitted_token() -> str:
             or "")
 
 
+def _explain_failure(app, expected: str, submitted: str) -> str:
+    """
+    Say WHY the check failed, when the reason is knowable.
+
+    There is one misconfiguration that produces this failure on every single request and
+    looks nothing like its cause: SESSION_COOKIE_SECURE set while the site is served
+    over plain HTTP. The browser accepts the cookie and then refuses to send it back, so
+    the server never sees a session, `expected` is always empty, and every sign-in
+    returns 400. "Your session expired" is actively misleading there — the session was
+    never received.
+
+    It is worth naming because it is exactly what happens when the container image
+    (which sets HEARTGUARD_HTTPS for its deployed use) is run locally over http.
+    """
+    if not expected and app.config.get("SESSION_COOKIE_SECURE") \
+            and request.scheme != "https":
+        return ("The session cookie is marked Secure, so the browser will not send it "
+                "over plain HTTP and sign-in cannot complete. Serve this over HTTPS, "
+                "or unset HEARTGUARD_HTTPS when running locally.")
+    if not submitted:
+        return ("The form was submitted without its security token. Reload the page "
+                "and try again.")
+    return ("Your session expired, or the form was not submitted from this "
+            "application. Reload the page and try again.")
+
+
 def init_csrf(app) -> None:
     """Register the check and expose `csrf_token()` to templates."""
 
@@ -70,9 +96,7 @@ def init_csrf(app) -> None:
         # time the response.
         if not expected or not submitted or not hmac.compare_digest(expected,
                                                                     submitted):
-            abort(400, description="Your session expired or the form was not "
-                                   "submitted from this application. Reload and "
-                                   "try again.")
+            abort(400, description=_explain_failure(app, expected, submitted))
         return None
 
     @app.context_processor

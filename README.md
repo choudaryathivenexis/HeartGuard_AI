@@ -1,8 +1,26 @@
+---
+title: HeartGuard AI
+emoji: 🫀
+colorFrom: red
+colorTo: gray
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # HeartGuard AI
 
 Cardiovascular risk screening. A Flask web application over five trained estimators,
 with the model's operating point, applicability and reliability disclosed on every
 result.
+
+<!-- The YAML block above is Hugging Face Spaces configuration; it has to be the first
+     thing in README.md and it has to live in this file, which is why it sits above the
+     title. GitHub shows it as plain text at the top of the rendered page - the cosmetic
+     cost of one repository serving as both the source and the Space. -->
+
+> **Live demo:** deployed on Hugging Face Spaces. The database is recreated whenever the
+> Space restarts or rebuilds, so it holds demonstration data only — see *Deploying* below.
 
 ---
 
@@ -23,14 +41,37 @@ requests.
 
 ---
 
-## Deploying (Render free plan)
+## Deploying
 
-`render.yaml` is a Blueprint: in the Render dashboard choose **New → Blueprint** and
-pick this repository. Everything — runtime, build and start commands, health check,
-environment variables — comes from that file.
+Two configurations ship with the project. **Hugging Face Spaces needs no payment
+details**; Render's free plan now asks for a card even though it does not charge one.
 
-**The free plan has no persistent disk, and that has consequences worth knowing before
-you show it to anyone:**
+### Hugging Face Spaces (no card required)
+
+Create a Space with **SDK: Docker**, then push this repository to it:
+
+```bash
+git remote add hf https://huggingface.co/spaces/<your-user>/heartguard-ai
+git push hf main
+```
+
+The `Dockerfile` and the YAML block at the top of this file are all the configuration
+needed. Free CPU tier gives 2 vCPU and 16 GB RAM — comfortable, against a measured peak
+of 333 MB with all five models loaded and a SHAP explanation computed.
+
+One detail the Dockerfile handles and which is easy to miss elsewhere: xgboost's wheel
+links against OpenMP at runtime, so `libgomp1` must be installed or the container builds
+cleanly and then dies on first import.
+
+### Render (free plan, but asks for a card)
+
+`render.yaml` is a Blueprint: **New → Blueprint** in the dashboard, pick this
+repository, Apply. Runtime, commands, health check and environment variables all come
+from that file.
+
+### Either way: there is no persistent disk
+
+**This matters before you show it to anyone:**
 
 | | behaviour |
 |---|---|

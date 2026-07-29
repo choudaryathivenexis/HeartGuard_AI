@@ -117,15 +117,37 @@ def is_locked_out(username: str, client_ip: str | None = None) -> int:
 
 
 def init_hardening(app) -> None:
+    import os
+
     @app.after_request
     def _headers(response):
         for header, value in _HEADERS.items():
             response.headers.setdefault(header, value)
         return response
 
-    # The Secure flag can only be set when the site is actually served over TLS —
-    # setting it on plain HTTP means the browser never sends the cookie back and
-    # nobody can sign in at all.
-    import os
+    # ── trust the proxy's forwarded headers, when there IS a trusted proxy ────
+    #
+    # THIS IS NOT COSMETIC. Behind a reverse proxy — Hugging Face Spaces, Render, nginx
+    # — `request.remote_addr` is the PROXY's address, the same value for every visitor
+    # on earth. The rate limiter keys on (ip, username), so with a constant ip an
+    # attacker guessing at `admin` accumulates failures against the same bucket the
+    # real administrator hashes to, and locks them out. The limiter stops being a
+    # brute-force defence and becomes a denial-of-service tool aimed at real accounts —
+    # the exact collateral lockout the per-pair key was chosen to avoid.
+    #
+    # OPT-IN, because trusting these headers without a proxy in front is worse than not
+    # trusting them: any client can send its own X-Forwarded-For and pick a fresh
+    # identity for every attempt, which evades the limiter completely. Only set
+    # HEARTGUARD_TRUST_PROXY where something you control terminates the connection.
+    if os.environ.get("HEARTGUARD_TRUST_PROXY") == "1":
+        from werkzeug.middleware.proxy_fix import ProxyFix
+        # x_for=1 / x_proto=1: trust exactly one hop. A larger number lets a client
+        # prepend entries to the header and impersonate an arbitrary address.
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+
+    # The Secure flag requires TLS. Setting it on a plain-HTTP host means the browser
+    # never returns the cookie, so the CSRF check finds no session token and every
+    # sign-in fails with 400 — see the diagnostic in backend/web/csrf.py, which exists
+    # because that failure is otherwise indistinguishable from an expired form.
     if os.environ.get("HEARTGUARD_HTTPS") == "1":
         app.config["SESSION_COOKIE_SECURE"] = True

@@ -1,0 +1,19 @@
+# Keep the build context small and the image free of local state.
+.git
+.venv
+.vscode
+__pycache__
+*.pyc
+
+# Local runtime state. The container creates its own on first boot, and copying a
+# development database into a public image would publish real records.
+heartguard.db
+heartguard.db-*
+system_settings.json
+backups/
+heart.csv.previous
+
+# Development-only documents.
+CONTEXT.md
+PROJECT.md
+TASK.md
