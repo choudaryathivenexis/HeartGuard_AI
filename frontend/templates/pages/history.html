@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% import "partials/macros.html" as m with context %}
+{% block title %}Prediction history{% endblock %}
+{% block content %}
+  {{ m.pagehead("Prediction history", "Every assessment you have recorded.") }}
+
+  <form method="get" class="row" style="margin-bottom:16px">
+    <label class="field__label" for="band" style="margin:0">Filter by band</label>
+    <select id="band" name="band" style="max-width:220px">
+      <option value="">All bands</option>
+      {% for b in ["LOW RISK", "BORDERLINE", "INTERMEDIATE RISK", "HIGH RISK"] %}
+        <option value="{{ b }}" {% if band == b %}selected{% endif %}>{{ b|title }}</option>
+      {% endfor %}
+    </select>
+    <button class="btn btn--secondary btn--sm" type="submit">Apply</button>
+  </form>
+
+  {% if rows %}
+    <div class="tablewrap">
+      <table class="data">
+        <thead><tr>
+          <th>Time</th><th>Patient</th><th class="num">Age</th><th>Risk</th>
+          <th class="num">Estimate</th><th>Model</th><th>Outcome</th><th></th>
+        </tr></thead>
+        <tbody>
+          {% for r in rows %}
+            <tr>
+              <td class="mono">{{ r.timestamp }}</td>
+              <td>{{ r.patient_name or "-" }}<div class="subtle">{{ r.patient_ref or "" }}</div></td>
+              <td class="num">{{ r.age }}</td>
+              <td>{{ m.band_chip(r.risk_band) }}</td>
+              <td class="num">{{ fmt.pct(r.probability) }}</td>
+              <td>{{ r.model_used }}</td>
+              <td>{{ r.outcome or "-" }}</td>
+              <td class="num">
+                <div class="row row--end">
+                  <a class="btn btn--secondary btn--sm"
+                     href="{{ url_for('screening.report_pdf', pred_id=r.id) }}">PDF</a>
+                  <a class="btn btn--secondary btn--sm"
+                     href="{{ url_for('screening.report_text', pred_id=r.id) }}">TXT</a>
+                  <form method="post" action="{{ url_for('screening.delete', pred_id=r.id) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button class="btn btn--secondary btn--sm" type="submit">Delete</button>
+                  </form>
+                </div>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    {{ m.empty("No assessments recorded yet.") }}
+  {% endif %}
+{% endblock %}

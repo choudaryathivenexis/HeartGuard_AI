@@ -1,0 +1,93 @@
+{# Shared building blocks. Every page composes these rather than repeating markup —
+   the reason the page templates below are 20-60 lines each instead of 200. #}
+
+{% macro pagehead(title, subtitle=None, eyebrow=None, art=False) %}
+  <div class="pagehead">
+    <div>
+      {% if eyebrow %}<div class="eyebrow">{{ eyebrow }}</div>{% endif %}
+      <h1>{{ title }}</h1>
+      {% if subtitle %}<p class="pagehead__sub">{{ subtitle }}</p>{% endif %}
+    </div>
+    {% if art %}
+      <div class="pagehead__art" aria-hidden="true">
+        {{ ecg_strip(width=240, height=28, beats=2, stroke_width=1.6)|safe }}
+        {{ heart_mark(size=38, stroke_width=5.0)|safe }}
+      </div>
+    {% endif %}
+  </div>
+{% endmacro %}
+
+{% macro stat(label, value, hint=None, tone=None) %}
+  <div class="stat {% if tone %}stat--{{ tone }}{% endif %}">
+    <div class="stat__label">{{ label }}</div>
+    <div class="stat__value">{{ value }}</div>
+    {% if hint %}<div class="stat__hint">{{ hint }}</div>{% endif %}
+  </div>
+{% endmacro %}
+
+{% macro band_chip(band_label) %}
+  {%- set key = (band_label or '')|lower -%}
+  {%- if 'high' in key -%}{% set cls = 'high' %}
+  {%- elif 'intermediate' in key -%}{% set cls = 'intermediate' %}
+  {%- elif 'borderline' in key -%}{% set cls = 'borderline' %}
+  {%- elif 'low' in key -%}{% set cls = 'low' %}
+  {%- else -%}{% set cls = 'neutral' %}{%- endif -%}
+  <span class="chip chip--{{ cls }}">{{ band_label or '—' }}</span>
+{% endmacro %}
+
+{% macro alert(kind, title, body=None) %}
+  <div class="alert alert--{{ kind }}">
+    <div>
+      <div class="alert__title">{{ title }}</div>
+      {% if body %}<div>{{ body }}</div>{% endif %}
+    </div>
+  </div>
+{% endmacro %}
+
+{% macro empty(message) %}
+  <div class="empty">{{ message }}</div>
+{% endmacro %}
+
+{# A destructive action behind a typed confirmation. The value must be typed exactly;
+   the server checks it again, because a client-side-only guard can be skipped by
+   issuing the POST directly. #}
+{% macro danger_form(action, confirm_value, label, hint) %}
+  <div class="danger-zone">
+    <div class="danger-zone__title">Irreversible</div>
+    <p style="margin:6px 0 12px">{{ hint }}</p>
+    <form method="post" action="{{ action }}" class="row">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="text" name="confirm" required
+             placeholder="Type {{ confirm_value }} to confirm"
+             style="max-width:280px" autocomplete="off">
+      <button class="btn btn--danger" type="submit">{{ label }}</button>
+    </form>
+  </div>
+{% endmacro %}
+
+{% macro user_row(u, actor, can_delete=True) %}
+  <tr>
+    <td>{{ u.username }}</td>
+    <td>{{ u.fullname }}</td>
+    <td><span class="chip chip--neutral">{{ u.role }}</span></td>
+    <td>{{ u.email }}</td>
+    <td>{{ u.specialisation or '—' }}</td>
+    <td>{% if u.is_banned %}<span class="chip chip--high">Suspended</span>
+        {% else %}<span class="chip chip--low">Active</span>{% endif %}</td>
+    <td class="num">
+      <div class="row row--end">
+        {% if u.id != actor.id %}
+          <form method="post"
+                action="{{ url_for('admin.user_action', user_id=u.id, action='unban' if u.is_banned else 'ban') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button class="btn btn--secondary btn--sm" type="submit">
+              {{ 'Reinstate' if u.is_banned else 'Suspend' }}
+            </button>
+          </form>
+        {% else %}
+          <span class="subtle">your account</span>
+        {% endif %}
+      </div>
+    </td>
+  </tr>
+{% endmacro %}

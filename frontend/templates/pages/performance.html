@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% import "partials/macros.html" as m with context %}
+{% block title %}Model performance{% endblock %}
+{% block content %}
+  {{ m.pagehead("Model performance", "Measured on held-out patients at training time.") }}
+
+  <img class="chart" alt="Discrimination by model"
+       src="{{ url_for('charts.model_discrimination') }}">
+
+  <div class="eyebrow" style="margin-top:24px">Leaderboard</div>
+  {% if leaderboard %}
+    <div class="tablewrap">
+      <table class="data">
+        <thead><tr><th>Model</th><th class="num">AUC</th><th class="num">Accuracy</th>
+                   <th class="num">Precision</th><th class="num">Recall</th>
+                   <th class="num">F1</th></tr></thead>
+        <tbody>
+          {% for r in leaderboard %}
+            <tr>
+              <td>{{ r.name }}</td>
+              <td class="num mono">{{ fmt.auc(r.auc) }}</td>
+              <td class="num mono">{{ fmt.metric3(r.accuracy) }}</td>
+              <td class="num mono">{{ fmt.metric3(r.precision) }}</td>
+              <td class="num mono">{{ fmt.metric3(r.recall) }}</td>
+              <td class="num mono">{{ fmt.metric3(r.f1) }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    {{ m.empty("No trained models found. Train the models to populate this page.") }}
+  {% endif %}
+
+  {% if thresholds %}
+    <div class="eyebrow" style="margin-top:8px">Operating points</div>
+    <p class="subtle">
+      Chosen as the highest threshold still achieving the sensitivity target
+      {% if sensitivity_target %}({{ sensitivity_target }}){% endif %}. A screening tool
+      triages rather than diagnoses, so a missed case costs more than a false alarm.
+    </p>
+    <div class="tablewrap">
+      <table class="data">
+        <thead><tr><th>Model</th><th class="num">Threshold</th><th class="num">Sensitivity</th>
+                   <th class="num">Specificity</th><th class="num">PPV</th>
+                   <th class="num">NPV</th></tr></thead>
+        <tbody>
+          {% for name, t in thresholds.items() %}
+            <tr>
+              <td>{{ name }}</td>
+              <td class="num mono">{{ fmt.threshold(t.get("recommended")) }}</td>
+              <td class="num mono">{{ fmt.metric3(t.get("sensitivity")) }}</td>
+              <td class="num mono">{{ fmt.metric3(t.get("specificity")) }}</td>
+              <td class="num mono">{{ fmt.metric3(t.get("ppv")) }}</td>
+              <td class="num mono">{{ fmt.metric3(t.get("npv")) }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
+
+  {% if subgroups %}
+    <div class="eyebrow">Performance by subgroup</div>
+    <p class="subtle">
+      Aggregate discrimination hides real variation between patient groups. This is the
+      figure a clinician needs to calibrate trust in a score.
+    </p>
+    {% for group, levels in subgroups.items() %}
+      <div class="panel">
+        <div class="panel__title">{{ group }}</div>
+        <div class="tablewrap">
+          <table class="data">
+            <thead><tr><th>Level</th><th class="num">AUC</th><th class="num">n</th></tr></thead>
+            <tbody>
+              {% for lv in levels %}
+                <tr>
+                  <td>{{ lv.level }}</td>
+                  <td class="num mono">{{ fmt.auc(lv.auc) }}</td>
+                  <td class="num mono">{{ fmt.count(lv.n) }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    {% endfor %}
+  {% endif %}
+
+  {% if manifest %}
+    <div class="panel">
+      <div class="eyebrow">Provenance</div>
+      <div class="grid grid--3">
+        <div><div class="stat__label">Rows trained on</div>
+             <div class="mono">{{ fmt.count(manifest.get("dataset", {}).get("rows_used_for_training")) }}</div></div>
+        <div><div class="stat__label">Trained at</div>
+             <div class="mono">{{ manifest.get("trained_at", "-") }}</div></div>
+        <div><div class="stat__label">Dataset digest</div>
+             <div class="mono">{{ (manifest.get("dataset", {}).get("sha256") or "-")[:16] }}</div></div>
+      </div>
+    </div>
+  {% endif %}
+{% endblock %}

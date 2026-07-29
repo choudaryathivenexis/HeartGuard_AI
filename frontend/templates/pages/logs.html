@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% import "partials/macros.html" as m with context %}
+{% block title %}Activity logs{% endblock %}
+{% block content %}
+  {{ m.pagehead("Activity logs", "System audit trail.") }}
+  {% if rows %}
+    <div class="tablewrap">
+      <table class="data">
+        <thead><tr><th>Time</th><th>User</th><th>Action</th><th>Detail</th></tr></thead>
+        <tbody>
+          {% for r in rows %}
+            <tr>
+              <td class="mono">{{ r.timestamp }}</td>
+              <td>{{ r.username }}</td>
+              <td>{{ r.action }}</td>
+              <td>{{ r.details }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {{ m.danger_form(url_for('system.clear_logs'), "CLEAR LOGS", "Clear the audit log",
+                     "The audit trail is what makes administrative action reviewable.") }}
+  {% else %}
+    {{ m.empty("No activity recorded.") }}
+  {% endif %}
+{% endblock %}

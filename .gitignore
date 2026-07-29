@@ -7,3 +7,20 @@ custom_dataset.csv
 system_settings.json
 .backup_pre_fix_*/
 _iotest_snap/
+
+# Runtime artefacts.
+#
+# Comments go on their OWN line. In .gitignore a `#` only starts a comment at the
+# beginning of a line, so `backups/   # snapshots` is a pattern that literally contains
+# spaces and a hash — it matches nothing. Both entries below were written that way and
+# were silently inert, which would have committed a 135 KB database snapshot per backup.
+
+# Operator-created database snapshots, made through Backup & Restore.
+backups/
+
+# Kept automatically when the training dataset is replaced.
+heart.csv.previous
+
+# SQLite WAL sidecars. Transient, and meaningless without the database they belong to.
+*.db-wal
+*.db-shm

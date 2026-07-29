@@ -22,9 +22,9 @@ import xml.etree.ElementTree as ET
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from ui import brand as B
-from ui import icons as I
-from ui import tokens as T
+from frontend.design import brand as B
+from frontend.design import icons as I
+from shared import tokens as T
 
 FAILURES: list[str] = []
 

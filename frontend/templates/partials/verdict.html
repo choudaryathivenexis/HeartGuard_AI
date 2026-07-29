@@ -1,0 +1,158 @@
+{# The screening result.
+
+   VERTICAL PRIORITY IS DELIBERATE: the number, then the band it falls in, then the
+   operating point that produced it, then how reliable the model is for THIS patient.
+   Anything that qualifies the estimate appears above the fold with it, never below —
+   a caveat a clinician has to scroll to find is a caveat that will not be read. #}
+{% import "partials/macros.html" as m with context %}
+
+<div class="panel verdict verdict--{{ result.band }}">
+  <div class="eyebrow">Screening result</div>
+  <div class="verdict__row">
+    <div class="verdict__value">{{ fmt.pct(result.final_prob) }}</div>
+    {{ m.band_chip(result.band_label) }}
+  </div>
+
+  {% set edges = result.band_edges %}
+  <div class="rail" aria-hidden="true">
+    <div class="rail__bands">
+      <div class="rail__band rail__band--low"
+           style="width: {{ (edges[0] * 100)|round(1) }}%"></div>
+      <div class="rail__band rail__band--borderline"
+           style="width: {{ ((edges[1] - edges[0]) * 100)|round(1) }}%"></div>
+      <div class="rail__band rail__band--intermediate"
+           style="width: {{ ((edges[2] - edges[1]) * 100)|round(1) }}%"></div>
+      <div class="rail__band rail__band--high"
+           style="width: {{ ((1 - edges[2]) * 100)|round(1) }}%"></div>
+    </div>
+    <div class="rail__scale">
+      <span class="rail__marker" style="left: {{ (result.threshold * 100)|round(1) }}%">
+        threshold {{ fmt.threshold(result.threshold) }}
+      </span>
+    </div>
+    <div class="rail__labels"><span>0%</span><span>100%</span></div>
+  </div>
+
+  <p class="verdict__action">{{ result.band_action }}</p>
+</div>
+
+{% if result.extrapolated %}
+  {{ m.alert("warning", "Outside the model's fitted range",
+             "One or more indicators fall outside the range this model was trained on.
+              The estimate is an extrapolation and the peer comparison is withheld. "
+              ~ (result.app_notes or "")) }}
+{% endif %}
+
+{% if result.link_error %}
+  {{ m.alert("warning", "Assessment saved without a patient link",
+             "The record was stored, but linking it to a patient entity failed ("
+             ~ result.link_error ~ "). The assessment is not lost.") }}
+{% endif %}
+
+<div class="panel">
+  <div class="eyebrow">Operating point</div>
+  <div class="grid grid--3">
+    <div><div class="stat__label">Threshold</div>
+         <div class="mono">{{ fmt.threshold(result.threshold) }}</div></div>
+    <div><div class="stat__label">Sensitivity</div>
+         <div class="mono">{{ fmt.metric3(result.thr_meta.get('sensitivity')) }}</div></div>
+    <div><div class="stat__label">Specificity</div>
+         <div class="mono">{{ fmt.metric3(result.thr_meta.get('specificity')) }}</div></div>
+    <div><div class="stat__label">PPV</div>
+         <div class="mono">{{ fmt.metric3(result.thr_meta.get('ppv')) }}</div></div>
+    <div><div class="stat__label">NPV</div>
+         <div class="mono">{{ fmt.metric3(result.thr_meta.get('npv')) }}</div></div>
+    <div><div class="stat__label">Model</div>
+         <div class="mono">{{ result.used_label }}</div></div>
+  </div>
+  <p class="subtle" style="margin-top:12px">
+    Derived for ages {{ result.age_band }} from out-of-fold predictions.
+  </p>
+</div>
+
+{% if result.sub_rel %}
+  <div class="panel">
+    <div class="eyebrow">Model reliability for this patient</div>
+    <div class="row">
+      <strong style="font-size:18px">{{ fmt.reliability_rating(result.sub_rel.auc) }}</strong>
+      <span class="chip chip--neutral">Age band {{ result.sub_rel.level }}</span>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <span class="muted">Discrimination</span>
+      <span class="mono">{{ fmt.value_with_ci(result.sub_rel.auc,
+                                              result.sub_rel.ci_low,
+                                              result.sub_rel.ci_high) }}</span>
+    </div>
+    <p class="subtle" style="margin-top:8px">
+      Measured on {{ fmt.count(result.sub_rel.n) }} held-out patients.
+    </p>
+  </div>
+{% endif %}
+
+{% if result.percentile is not none %}
+  <div class="panel">
+    <div class="eyebrow">Peer comparison</div>
+    <p style="margin:0">
+      This estimate sits at the <strong>{{ fmt.pct(result.percentile) }}</strong>
+      percentile for {{ result.pct_label }},
+      measured against {{ fmt.count(result.pct_n) }} comparable patients.
+    </p>
+  </div>
+{% endif %}
+
+{% if result.counterfactuals %}
+  <details class="expander">
+    <summary>What would change this estimate?</summary>
+    <p class="subtle">
+      Scored with {{ result.cf_model }}, which carries monotonic constraints — a change
+      in a protective direction cannot raise the predicted risk.
+    </p>
+    <div class="tablewrap">
+      <table class="data">
+        <thead><tr><th>Intervention</th><th class="num">New estimate</th>
+                   <th class="num">Change</th><th>Verdict</th></tr></thead>
+        <tbody>
+          {# Rows are dicts, not tuples. Each carries a `Verdict` classifying the row as
+             benefit / negligible / paradoxical — a paradoxical row is a model
+             limitation and is labelled as one, never presented as advice. #}
+          {% for row in result.counterfactuals %}
+            <tr>
+              <td>{{ row['Intervention'] }}</td>
+              <td class="num">{{ fmt.pct(row['New risk']) }}</td>
+              <td class="num">{{ fmt.signed(row['Change']) }}</td>
+              <td>
+                {% if row['Verdict'] == 'benefit' %}
+                  <span class="chip chip--low">Benefit</span>
+                {% elif row['Verdict'] == 'paradoxical' %}
+                  <span class="chip chip--high">Model artifact</span>
+                {% else %}
+                  <span class="chip chip--neutral">Negligible</span>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </details>
+{% endif %}
+
+<div class="panel">
+  <div class="eyebrow">Per-model estimates</div>
+  <div class="tablewrap">
+    <table class="data">
+      <thead><tr><th>Model</th><th class="num">Estimate</th>
+                 <th class="num">Its threshold</th><th>Above?</th></tr></thead>
+      <tbody>
+        {% for name, prob in result.probs.items() %}
+          <tr>
+            <td>{{ name }}</td>
+            <td class="num">{{ fmt.pct(prob) }}</td>
+            <td class="num mono">{{ fmt.threshold(result.member_thresholds.get(name)) }}</td>
+            <td>{{ 'Yes' if prob >= result.member_thresholds.get(name, 1) else 'No' }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>

@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% import "partials/macros.html" as m with context %}
+{% block title %}Patient {{ patient_ref }}{% endblock %}
+{% block content %}
+  {{ m.pagehead("Patient " ~ patient_ref, "Assessment timeline.", eyebrow="Patient record") }}
+  <a class="btn btn--secondary btn--sm" href="{{ url_for('patients.index') }}">Back to patients</a>
+
+  <div class="tablewrap" style="margin-top:16px">
+    <table class="data">
+      <thead><tr><th>Time</th><th>Clinician</th><th class="num">Age</th><th>Risk</th>
+                 <th class="num">Estimate</th><th>Outcome</th><th></th></tr></thead>
+      <tbody>
+        {% for r in timeline %}
+          <tr>
+            <td class="mono">{{ r.timestamp }}</td>
+            <td>{{ r.doctor_name or "-" }}</td>
+            <td class="num">{{ r.age }}</td>
+            <td>{{ m.band_chip(r.risk_band) }}</td>
+            <td class="num">{{ fmt.pct(r.probability) }}</td>
+            <td>
+              <form method="post" action="{{ url_for('patients.record_outcome', pred_id=r.id) }}"
+                    class="row">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <select name="outcome" style="max-width:150px">
+                  <option value="unknown" {% if not r.outcome or r.outcome == "unknown" %}selected{% endif %}>Unknown</option>
+                  <option value="confirmed" {% if r.outcome == "confirmed" %}selected{% endif %}>Confirmed</option>
+                  <option value="ruled_out" {% if r.outcome == "ruled_out" %}selected{% endif %}>Ruled out</option>
+                </select>
+                <button class="btn btn--secondary btn--sm" type="submit">Save</button>
+              </form>
+            </td>
+            <td class="num">
+              <a class="btn btn--secondary btn--sm"
+                 href="{{ url_for('screening.report_pdf', pred_id=r.id) }}">PDF</a>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% if current_user.role in ["Admin", "SuperAdmin"] %}
+    {{ m.danger_form(url_for('patients.delete', patient_ref=patient_ref), patient_ref,
+                     "Delete patient and all assessments",
+                     "This removes the patient record and every assessment linked to it.") }}
+  {% endif %}
+{% endblock %}

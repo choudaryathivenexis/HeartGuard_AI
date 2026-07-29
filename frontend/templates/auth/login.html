@@ -1,0 +1,130 @@
+{# Sign in / register. One template, two modes — the panel and the artwork are
+   identical either way, so duplicating the file would mean maintaining the brand side
+   twice. #}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ 'Register' if mode == 'register' else 'Sign in' }} · HeartGuard AI</title>
+  <link rel="icon" href="{{ url_for('static', filename='img/favicon.png') }}">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+</head>
+<body>
+<div class="auth">
+
+  <section class="auth__brandside">
+    {# Decorative only, and aria-hidden: it encodes no value and must not be announced. #}
+    <div class="auth__art" aria-hidden="true">
+      <div class="vessels">{{ vessel_watermark()|safe }}</div>
+      <div class="trace">{{ ecg_strip(width=900, height=110, beats=4, stroke_width=2.4)|safe }}</div>
+    </div>
+
+    <div style="margin-bottom:32px">{{ brand_lockup_mono(30, 22)|safe }}</div>
+    <p class="auth__statement">
+      Cardiovascular risk screening across {{ '{:,}'.format(rows) if rows else 'thousands of' }}
+      patient records, with the model's operating envelope disclosed on every result.
+    </p>
+
+    {% if facts %}
+      <dl class="auth__markers">
+        {% for label, value in facts %}
+          <div class="auth__marker"><dt>{{ label }}</dt><dd>{{ value }}</dd></div>
+        {% endfor %}
+      </dl>
+    {% endif %}
+  </section>
+
+  <section class="auth__formside">
+    <div class="auth__card">
+      {% if registration_allowed %}
+        <div class="auth__tabs">
+          <a class="auth__tab {% if mode != 'register' %}auth__tab--active{% endif %}"
+             href="{{ url_for('auth.login') }}">Sign in</a>
+          <a class="auth__tab {% if mode == 'register' %}auth__tab--active{% endif %}"
+             href="{{ url_for('auth.register') }}">Register</a>
+        </div>
+      {% endif %}
+
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% for category, message in messages %}
+          <div class="alert alert--{{ category }}"><div>{{ message }}</div></div>
+        {% endfor %}
+      {% endwith %}
+
+      {% if error %}
+        <div class="alert alert--danger" role="alert"><div>{{ error }}</div></div>
+      {% endif %}
+
+      {% if mode == 'register' %}
+        <h1 style="font-size:26px">Create an account</h1>
+        <p class="muted" style="font-size:13px">
+          New accounts are created with the Doctor role. An administrator can change it
+          afterwards.
+        </p>
+        <form method="post" action="{{ url_for('auth.register') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <div class="field">
+            <label class="field__label" for="fullname">Full name</label>
+            <input id="fullname" name="fullname" type="text" required
+                   value="{{ form.fullname if form else '' }}" autocomplete="name">
+          </div>
+          <div class="field">
+            <label class="field__label" for="username">Username</label>
+            <input id="username" name="username" type="text" required
+                   value="{{ form.username if form else '' }}" autocomplete="username">
+          </div>
+          <div class="field">
+            <label class="field__label" for="email">Email</label>
+            <input id="email" name="email" type="email" required
+                   value="{{ form.email if form else '' }}" autocomplete="email">
+          </div>
+          <div class="field">
+            <label class="field__label" for="specialisation">Specialisation <span class="subtle">(optional)</span></label>
+            <input id="specialisation" name="specialisation" type="text"
+                   value="{{ form.specialisation if form else '' }}">
+          </div>
+          <div class="field">
+            <label class="field__label" for="password">Password</label>
+            <input id="password" name="password" type="password" required
+                   minlength="8" autocomplete="new-password">
+            <div class="field__hint">At least 8 characters.</div>
+          </div>
+          <div class="field">
+            <label class="field__label" for="confirm">Confirm password</label>
+            <input id="confirm" name="confirm" type="password" required
+                   autocomplete="new-password">
+          </div>
+          <button class="btn btn--primary btn--block" type="submit">Create account</button>
+        </form>
+      {% else %}
+        <h1 style="font-size:26px">Sign in</h1>
+        <p class="muted" style="font-size:13px">Access the cardiovascular screening console.</p>
+        <form method="post" action="{{ url_for('auth.login') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="next" value="{{ request.args.get('next', '') }}">
+          <div class="field">
+            <label class="field__label" for="username">Username</label>
+            <input id="username" name="username" type="text" required autofocus
+                   autocomplete="username">
+          </div>
+          <div class="field">
+            <label class="field__label" for="password">Password</label>
+            <input id="password" name="password" type="password" required
+                   autocomplete="current-password">
+          </div>
+          <button class="btn btn--primary btn--block" type="submit">Sign in</button>
+        </form>
+        <p class="auth__hint">
+          First run? The seeded accounts were printed to the server console when the
+          database was created.
+        </p>
+      {% endif %}
+    </div>
+  </section>
+
+</div>
+</body>
+</html>

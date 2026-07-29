@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% import "partials/macros.html" as m with context %}
+{% block title %}ML model management{% endblock %}
+{% block content %}
+  {{ m.pagehead("ML model management", "Which estimators are in service, and retraining.") }}
+
+  {% if errors %}
+    <div class="alert alert--warning">
+      <div>
+        <div class="alert__title">Some artifacts could not be loaded</div>
+        <ul style="margin:6px 0 0 18px">
+          {% for name, reason in errors.items() %}<li>{{ name }}: {{ reason }}</li>{% endfor %}
+        </ul>
+      </div>
+    </div>
+  {% endif %}
+
+  <form method="post" class="panel">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="eyebrow">Estimators in service</div>
+    <p class="subtle">At least one model must remain enabled.</p>
+    {% for name in names %}
+      <div class="checkline">
+        <input id="model_{{ loop.index0 }}" name="model_{{ loop.index0 }}" type="checkbox"
+               {% if enabled.get(name, True) %}checked{% endif %}>
+        <label for="model_{{ loop.index0 }}">
+          {{ name }}
+          {% if name in loaded %}<span class="chip chip--low">loaded</span>
+          {% else %}<span class="chip chip--high">missing</span>{% endif %}
+        </label>
+      </div>
+    {% endfor %}
+    <button class="btn btn--primary" type="submit">Save selection</button>
+  </form>
+
+  <div class="panel">
+    <div class="eyebrow">Retrain</div>
+    <p class="subtle">
+      Retraining refits every estimator from the current dataset and rewrites the
+      artifacts in models/. It runs as a separate process and can take several minutes.
+    </p>
+    <form method="post" action="{{ url_for('system.train') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="btn btn--primary" type="submit">Retrain all models</button>
+    </form>
+  </div>
+
+  {% if runs %}
+    <div class="eyebrow">Training runs</div>
+    <div class="tablewrap">
+      <table class="data">
+        <thead><tr><th>Time</th><th>Triggered by</th><th>Status</th>
+                   <th class="num">Duration</th></tr></thead>
+        <tbody>
+          {% for r in runs %}
+            <tr>
+              <td class="mono">{{ r.timestamp }}</td>
+              <td>{{ r.triggered_by }}</td>
+              <td>{{ r.status }}</td>
+              <td class="num mono">{{ "%.0fs"|format(r.duration_s or 0) }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
+{% endblock %}

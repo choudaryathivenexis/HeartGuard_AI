@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% import "partials/macros.html" as m with context %}
+{% block title %}Dataset management{% endblock %}
+{% block content %}
+  {{ m.pagehead("Dataset management", "The training dataset behind the models.") }}
+
+  {% if info.exists %}
+    <div class="stats">
+      {{ m.stat("Rows", fmt.count(info.rows)) }}
+      {{ m.stat("Columns", info.columns|length) }}
+      {{ m.stat("File size", "%.1f KB"|format(info.size_kb)) }}
+    </div>
+    <div class="panel">
+      <div class="eyebrow">Columns</div>
+      <p class="mono" style="margin:0">{{ info.columns|join(", ") }}</p>
+    </div>
+  {% else %}
+    {{ m.alert("warning", "No dataset present", "heart.csv was not found.") }}
+  {% endif %}
+
+  <div class="panel">
+    <div class="eyebrow">Replace the dataset</div>
+    <p class="subtle">
+      Uploading replaces heart.csv. The models in models/ were fitted on the current
+      file and keep their old behaviour until they are retrained.
+      {% if has_backup %} The previous dataset is kept as heart.csv.previous.{% endif %}
+    </p>
+    <form method="post" enctype="multipart/form-data" class="row">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="file" name="dataset" accept=".csv" required>
+      <button class="btn btn--primary" type="submit">Upload dataset</button>
+    </form>
+  </div>
+{% endblock %}

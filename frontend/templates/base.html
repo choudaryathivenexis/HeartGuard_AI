@@ -1,0 +1,80 @@
+{#
+  The application shell: sidebar navigation plus a content column.
+
+  The sidebar is PERMANENT — there is no collapse control. An earlier build had one,
+  and because the collapsed state lived in the browser a user who dismissed the
+  navigation came back to a page with no way to restore it. Removing the control
+  removes the state, and the state was the bug.
+#}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}HeartGuard AI{% endblock %} · HeartGuard AI</title>
+  <link rel="icon" href="{{ url_for('static', filename='img/favicon.png') }}">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+</head>
+<body>
+<div class="shell">
+
+  <aside class="sidebar">
+    <div class="sidebar__brand">{{ brand_lockup()|safe }}</div>
+    <div class="sidebar__rule"></div>
+
+    {% if current_user %}
+      <div class="sidebar__user">
+        <div class="sidebar__name">{{ current_user.fullname }}</div>
+        <div><span class="chip chip--neutral">{{ current_user.role }}</span></div>
+        <div class="sidebar__meta">{{ current_user.specialisation or current_user.email }}</div>
+      </div>
+
+      <nav>
+        {% for group, items in nav_groups %}
+          <div class="sidebar__group">
+            <div class="sidebar__grouptitle">{{ group }}</div>
+            {% for endpoint, label, icon in items %}
+              <a class="navlink {% if request.endpoint == endpoint %}navlink--active{% endif %}"
+                 href="{{ url_for(endpoint) }}">
+                {{ nav_icon(icon)|safe }}<span>{{ label }}</span>
+              </a>
+            {% endfor %}
+          </div>
+        {% endfor %}
+        <div class="sidebar__group">
+          <form method="post" action="{{ url_for('auth.logout') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="navlink" style="width:100%;background:none;border:0;border-left:3px solid transparent;cursor:pointer;font:inherit;text-align:left;">
+              {{ nav_icon('signout')|safe }}<span>Sign out</span>
+            </button>
+          </form>
+        </div>
+      </nav>
+
+      <div class="sidebar__foot">
+        {{ app_version }}<br>
+        model {{ model_version or '—' }}
+      </div>
+    {% endif %}
+  </aside>
+
+  <main class="main">
+    <div class="content">
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          <div class="flashes">
+            {% for category, message in messages %}
+              <div class="alert alert--{{ category }}"><div>{{ message }}</div></div>
+            {% endfor %}
+          </div>
+        {% endif %}
+      {% endwith %}
+
+      {% block content %}{% endblock %}
+    </div>
+  </main>
+
+</div>
+</body>
+</html>

@@ -37,8 +37,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from ui import charts as C
-from ui import tokens as T
+from backend.ml import charts as C
+from shared import tokens as T
 
 FAILURES: list[str] = []
 HEX6 = re.compile(r"^#[0-9A-Fa-f]{6}$")
@@ -184,25 +184,16 @@ check("only the two named spines are visible",
 check("gridlines sit behind the data", ax.get_axisbelow() is True)
 
 
-class _Sink:
-    called = False
-
-    @staticmethod
-    def pyplot(f, **kw):
-        _Sink.called = True
-
-
-import streamlit as _st
-_real = _st.pyplot
-C.st = _Sink
-try:
-    C.render(fig)
-finally:
-    C.st = _st
-check("render() hands the figure to streamlit", _Sink.called)
-# matplotlib keeps every unclosed figure in a global registry, and this app reruns per
-# keystroke. A leak here is a leak per keypress.
-check("render() closes the figure", len(plt.get_fignums()) == before,
+# `render()` handed the figure to Streamlit and was asserted against a fake st.pyplot.
+# There is no Streamlit any more: the web layer serves charts as images from a route,
+# so the contract is now "PNG bytes out, figure closed".
+png = C.to_png(fig)
+check("to_png returns PNG bytes", png[:8] == b"\x89PNG\r\n\x1a\n", str(png[:8]))
+check("to_png returns a non-trivial image", len(png) > 500, f"{len(png)} bytes")
+# matplotlib keeps every unclosed figure in a global registry. Under a long-lived
+# server that is one leaked figure per request until the process runs out of memory —
+# strictly worse than the per-rerun leak this guarded against before.
+check("to_png closes the figure", len(plt.get_fignums()) == before,
       f"{len(plt.get_fignums())} open, expected {before}")
 
 
@@ -221,15 +212,20 @@ HTMLISH = re.compile(
     r"linear-gradient|unsafe_allow_html|color:#|kpi\(")
 ALLOWED_LITERAL = {"none", "white"}   # 'white' only survives on the printed A4 page
 
-for path in ("app.py", "pages_ext.py", "clinical_ui.py"):
+# The scan follows the code, not the old filenames: after the restructure the only
+# modules that touch matplotlib are the clinical figure builder and the chart
+# routes. app.py is a 25-line launcher and pages_ext.py no longer exists.
+# clinical.py became seven focused modules; the scan follows every one that draws.
+for path in ("backend/ml/figures.py", "backend/ml/pdf.py",
+             "backend/web/charts.py"):
     offences = []
     for i, line in enumerate(open(path, encoding="utf-8"), 1):
         if HTMLISH.search(line):
             continue
         for value in MPL_KW.findall(line):
             if value.lower() in ALLOWED_LITERAL:
-                # 'white' is legitimate ONLY in clinical_ui's PDF, which prints on A4.
-                if value.lower() == "white" and path != "clinical_ui.py":
+                # 'white' is legitimate ONLY in the PDF builder, which prints on A4.
+                if value.lower() == "white" and not path.endswith("pdf.py"):
                     offences.append(f"{i}: color='white' outside the PDF")
                 continue
             offences.append(f"{i}: {value}")
@@ -240,17 +236,17 @@ for path in ("app.py", "pages_ext.py", "clinical_ui.py"):
     check(f"{path}: no colour literal reaches matplotlib", not offences,
           "; ".join(offences[:6]))
 
-# And the pages must be reaching for the module that replaced them.
-for path in ("app.py", "pages_ext.py", "clinical_ui.py"):
+# And the figure builders must be reaching for the palette module.
+for path in ("backend/ml/figures.py", "backend/ml/pdf.py"):
     src = open(path, encoding="utf-8").read()
-    check(f"{path}: routes colour through ui.charts",
-          "ucharts." in src and "from ui import charts as ucharts" in src)
+    check(f"{path}: routes colour through the charts palette",
+          "ucharts." in src and "from . import charts as ucharts" in src)
 
 
 print("\n=== 9. the PDF never follows the viewer's theme ===")
 # A dark-mode user exporting a report would otherwise get near-white ink on white A4 —
 # an unreadable file, produced silently, that they then hand to someone else.
-src = open("clinical_ui.py", encoding="utf-8").read()
+src = open("backend/ml/pdf.py", encoding="utf-8").read()
 pdf_block = src[src.index("def _pdf_text_page"):src.index("def build_pdf_report")]
 # Strip comments first. The block contains a comment explaining WHY color() must not be
 # used here, and matching raw source flagged that prose as a violation — the same
@@ -261,10 +257,12 @@ check("the PDF page pins palette('light')", "palette('light')" in pdf_code)
 check("the PDF page never calls the theme-following color()",
       "ucharts.color(" not in pdf_code,
       "color() follows the viewer and is wrong on a printed page")
+figures_src = open("backend/ml/figures.py", encoding="utf-8").read()
 check("waterfall_figure accepts a theme so the PDF copy can be pinned",
-      "theme=None" in src[src.index("def waterfall_figure"):][:400])
-check("app.py pins the PDF waterfall to light",
-      'theme="light"' in open("app.py", encoding="utf-8").read())
+      "theme=None" in figures_src[figures_src.index("def waterfall_figure"):][:400])
+# The PDF waterfall is now built by the reporting service, not by a page.
+check("the reporting service pins the PDF waterfall to light",
+      'theme="light"' in open("backend/services/reporting.py", encoding="utf-8").read())
 
 
 print("\n" + "=" * 66)

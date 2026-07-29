@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% import "partials/macros.html" as m with context %}
+{% block title %}Reports{% endblock %}
+{% block content %}
+  {{ m.pagehead("Reports", "Cohort summary and export.") }}
+
+  <div class="stats">
+    {{ m.stat("Assessments", total) }}
+    {% for band, count in mix.items() %}
+      {{ m.stat(band|title, count) }}
+    {% endfor %}
+  </div>
+
+  <div class="row" style="margin-bottom:16px">
+    <a class="btn btn--primary" href="{{ url_for('reports.export_csv') }}">Export CSV</a>
+    <span class="subtle">Scoped to the records your role may see.</span>
+  </div>
+
+  {% if outcomes %}
+    <div class="panel">
+      <div class="eyebrow">Recorded outcomes</div>
+      <div class="grid grid--3">
+        {% for key, value in outcomes.items() %}
+          <div><div class="stat__label">{{ key|replace("_", " ")|title }}</div>
+               <div class="mono">{{ value }}</div></div>
+        {% endfor %}
+      </div>
+    </div>
+  {% endif %}
+
+  {% if rows %}
+    <div class="tablewrap">
+      <table class="data">
+        <thead><tr><th>Time</th><th>Patient</th><th>Clinician</th><th>Risk</th>
+                   <th class="num">Estimate</th><th>Model</th></tr></thead>
+        <tbody>
+          {% for r in rows %}
+            <tr>
+              <td class="mono">{{ r.timestamp }}</td>
+              <td>{{ r.patient_name or "-" }}</td>
+              <td>{{ r.doctor_name or "-" }}</td>
+              <td>{{ m.band_chip(r.risk_band) }}</td>
+              <td class="num">{{ fmt.pct(r.probability) }}</td>
+              <td>{{ r.model_used }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    {{ m.empty("Nothing to report yet.") }}
+  {% endif %}
+{% endblock %}

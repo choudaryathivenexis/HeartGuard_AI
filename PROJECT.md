@@ -16,7 +16,7 @@
 | **Name** | HeartGuard AI — Cardiovascular Risk Intelligence Portal |
 | **Type** | Final Year Project (FYP 2026) — clinical decision-support web application |
 | **Purpose** | Predict binary cardiovascular disease risk from 11 routine clinical indicators, with role-based access, audit logging, model management and explainability |
-| **Interface** | Streamlit multi-page single-process web app |
+| **Interface** | Flask web application, server-rendered HTML/CSS |
 | **Version string** | `HeartGuard AI v2.0 · FYP 2026` ([app.py:388](app.py#L388)) |
 | **Working directory** | `i:\Ariha\FYP\HeartGuard FYP\HeartGuard FYP` |
 | **Version control** | **None** — not a git repository |
@@ -34,7 +34,7 @@ The UI presents "5 AI models trained on 70,000 patient records."
 | Component | Declared in `requirements.txt` | Actually installed in `.venv` |
 |---|---|---|
 | Python | 3.11–3.13 (comment) | **3.14.6** — outside declared range |
-| streamlit | `>=1.30` | 1.59.2 |
+| flask | `>=3.0` | 3.1.3 |
 | pandas | `>=2.0` | **3.0.3** — major version ahead |
 | numpy | `>=1.24` | 2.4.6 |
 | scikit-learn | `>=1.9.0` | 1.9.0 |

@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% import "partials/macros.html" as m with context %}
+{% block title %}Prediction management{% endblock %}
+{% block content %}
+  {{ m.pagehead("Prediction management", "Every assessment recorded across the institution.") }}
+
+  <div class="stats">{{ m.stat("Total assessments", total) }}</div>
+
+  <form method="get" class="row" style="margin-bottom:16px">
+    <select name="band" style="max-width:220px">
+      <option value="">All bands</option>
+      {% for b in ["LOW RISK", "BORDERLINE", "INTERMEDIATE RISK", "HIGH RISK"] %}
+        <option value="{{ b }}" {% if band == b %}selected{% endif %}>{{ b|title }}</option>
+      {% endfor %}
+    </select>
+    <button class="btn btn--secondary" type="submit">Filter</button>
+  </form>
+
+  {% if rows %}
+    <div class="tablewrap">
+      <table class="data">
+        <thead><tr><th class="num">ID</th><th>Time</th><th>Patient</th><th>Clinician</th>
+                   <th>Risk</th><th class="num">Estimate</th><th></th></tr></thead>
+        <tbody>
+          {% for r in rows %}
+            <tr>
+              <td class="num mono">{{ r.id }}</td>
+              <td class="mono">{{ r.timestamp }}</td>
+              <td>{{ r.patient_name or "-" }}</td>
+              <td>{{ r.doctor_name or "-" }}</td>
+              <td>{{ m.band_chip(r.risk_band) }}</td>
+              <td class="num">{{ fmt.pct(r.probability) }}</td>
+              <td class="num">
+                <form method="post"
+                      action="{{ url_for('admin.delete_prediction', pred_id=r.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <button class="btn btn--secondary btn--sm" type="submit">Delete</button>
+                </form>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    {{ m.empty("No assessments match that filter.") }}
+  {% endif %}
+
+  {% if current_user.role == "SuperAdmin" %}
+    {{ m.danger_form(url_for('admin.clear_predictions'), "DELETE ALL",
+                     "Clear every assessment",
+                     "This permanently removes all assessment records for all clinicians.") }}
+  {% endif %}
+{% endblock %}

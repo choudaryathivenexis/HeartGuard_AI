@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% import "partials/macros.html" as m with context %}
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+  {{ m.pagehead("Dashboard",
+                "Signed in as %s · %s"|format(current_user.fullname, current_user.role),
+                art=True) }}
+
+  <div class="stats">
+    {{ m.stat("Assessments", summary.total, summary.scope) }}
+    {{ m.stat("Flagged for follow-up", summary.flagged,
+              "%s of assessments"|format(fmt.pct(summary.flagged_pct)), tone="danger") }}
+    {{ m.stat("Below threshold", summary.below, tone="good") }}
+    {% if current_user.role != 'Doctor' %}
+      {{ m.stat("Users", summary.users) }}
+      {{ m.stat("Doctors", summary.doctors) }}
+    {% endif %}
+    {{ m.stat("Active models", summary.active_models) }}
+  </div>
+
+  <div class="grid grid--sidebarless">
+    <section>
+      <div class="eyebrow">Recent assessments</div>
+      {% if recent %}
+        <div class="tablewrap">
+          <table class="data">
+            <thead><tr>
+              <th>Time</th><th>Patient</th><th class="num">Age</th>
+              <th>Risk</th><th class="num">Probability</th><th>Model</th>
+            </tr></thead>
+            <tbody>
+              {% for r in recent %}
+                <tr>
+                  <td class="mono">{{ r.timestamp }}</td>
+                  <td>{{ r.patient_name or '—' }}</td>
+                  <td class="num">{{ r.age }}</td>
+                  <td>{{ m.band_chip(r.risk_band) }}</td>
+                  <td class="num">{{ fmt.pct(r.probability) }}</td>
+                  <td>{{ r.model_used }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        {{ m.empty("No assessments yet. Run a screening to see it here.") }}
+      {% endif %}
+    </section>
+
+    <section>
+      <div class="eyebrow">Model discrimination</div>
+      {% if summary.active_models %}
+        <img class="chart" alt="Discrimination by model"
+             src="{{ url_for('charts.model_discrimination') }}">
+      {% else %}
+        {{ m.empty("No trained models found.") }}
+      {% endif %}
+
+      <div class="eyebrow" style="margin-top:24px">Risk mix</div>
+      <img class="chart" alt="Assessments by risk band"
+           src="{{ url_for('charts.risk_mix') }}">
+    </section>
+  </div>
+
+  {% if activity %}
+    <div class="eyebrow" style="margin-top:8px">Recent system activity</div>
+    <div class="tablewrap">
+      <table class="data">
+        <thead><tr><th>Time</th><th>User</th><th>Action</th><th>Detail</th></tr></thead>
+        <tbody>
+          {% for a in activity %}
+            <tr>
+              <td class="mono">{{ a.timestamp }}</td>
+              <td>{{ a.username }}</td>
+              <td>{{ a.action }}</td>
+              <td>{{ a.details }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
+{% endblock %}

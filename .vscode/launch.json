@@ -1,0 +1,76 @@
+{
+  // Launch configurations for the Flask application.
+  //
+  // `app.py` IS directly runnable: it is a launcher that calls `create_app().run()`.
+  // That was not true of the Streamlit version this file used to target, where running
+  // the file printed a bare-mode warning and started no server — which is why these
+  // configurations used to launch a MODULE instead of a program.
+  //
+  // Every configuration names the venv interpreter explicitly. The `python` first on
+  // PATH on this machine is a system 3.14 install without matplotlib, scikit-learn,
+  // xgboost or shap, so it fails on the first import.
+  "version": "0.2.0",
+  "configurations": [
+    {
+      // F5 default: development server with the debugger attached, breakpoints live.
+      "name": "HeartGuard: dev server (debug)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/app.py",
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "env": {
+        // Werkzeug's reloader forks, so with it on one process serves while the other
+        // is attached and breakpoints land in the wrong one. VS Code restarts the
+        // process on edit instead.
+        "HEARTGUARD_DEBUG": "0",
+        "PORT": "5000"
+      }
+    },
+    {
+      // Faster start, no debugger. The reloader is on, so edits reload themselves.
+      "name": "HeartGuard: dev server (auto-reload)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/app.py",
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "console": "integratedTerminal",
+      "noDebug": true,
+      "env": {
+        "HEARTGUARD_DEBUG": "1",
+        "PORT": "5000"
+      }
+    },
+    {
+      // The production server, for checking behaviour under waitress before deploying.
+      "name": "HeartGuard: production server (waitress)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/wsgi.py",
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "console": "integratedTerminal",
+      "noDebug": true,
+      "env": {
+        "HOST": "127.0.0.1",
+        "PORT": "8000",
+        "THREADS": "8"
+      }
+    },
+    {
+      // Run whichever test file is open. The suite is plain scripts, not pytest, so
+      // this is the whole runner.
+      "name": "HeartGuard: run the open test file",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${file}",
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    }
+  ]
+}

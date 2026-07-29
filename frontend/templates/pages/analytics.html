@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% import "partials/macros.html" as m with context %}
+{% block title %}Analytics{% endblock %}
+{% block content %}
+  {{ m.pagehead("Analytics", "Screening volume, risk mix and model standing.") }}
+
+  <div class="stats">
+    {{ m.stat("Assessments", summary.total) }}
+    {{ m.stat("Flagged", summary.flagged, tone="danger") }}
+    {{ m.stat("Below threshold", summary.below, tone="good") }}
+    {{ m.stat("Users", summary.users) }}
+  </div>
+
+  <div class="grid grid--2">
+    <div>
+      <div class="eyebrow">Assessments over time</div>
+      <img class="chart" alt="Assessments per day" src="{{ url_for('charts.activity') }}">
+    </div>
+    <div>
+      <div class="eyebrow">Risk mix</div>
+      <img class="chart" alt="Assessments by band" src="{{ url_for('charts.risk_mix') }}">
+    </div>
+  </div>
+
+  {% if outcomes %}
+    <div class="panel">
+      <div class="eyebrow">Recorded outcomes</div>
+      <div class="grid grid--3">
+        {% for key, value in outcomes.items() %}
+          <div><div class="stat__label">{{ key|replace("_", " ")|title }}</div>
+               <div class="mono">{{ value }}</div></div>
+        {% endfor %}
+      </div>
+    </div>
+  {% endif %}
+{% endblock %}

@@ -18,8 +18,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from ui import tokens as T
-from ui import format as F
+from shared import tokens as T
+from shared import formatting as F
 
 FAILURES: list[str] = []
 

@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% import "partials/macros.html" as m with context %}
+{% block title %}Backup and restore{% endblock %}
+{% block content %}
+  {{ m.pagehead("Backup & restore", "Snapshots of the patient database.") }}
+
+  <div class="panel">
+    <div class="eyebrow">Create a snapshot</div>
+    <form method="post" action="{{ url_for('system.create_backup') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="btn btn--primary" type="submit">Create backup now</button>
+    </form>
+  </div>
+
+  {% if backups %}
+    <div class="tablewrap">
+      <table class="data">
+        <thead><tr><th>File</th><th>Created</th><th class="num">Size</th><th></th></tr></thead>
+        <tbody>
+          {% for b in backups %}
+            <tr>
+              <td class="mono">{{ b.name }}</td>
+              <td class="mono">{{ b.created }}</td>
+              <td class="num mono">{{ "%.0f KB"|format(b.size_kb) }}</td>
+              <td class="num">
+                <div class="row row--end">
+                  <a class="btn btn--secondary btn--sm"
+                     href="{{ url_for('system.download_backup', name=b.name) }}">Download</a>
+                  <form method="post"
+                        action="{{ url_for('system.restore_backup', name=b.name) }}"
+                        class="row">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="text" name="confirm" placeholder="type filename"
+                           style="max-width:190px" autocomplete="off" required>
+                    <button class="btn btn--danger btn--sm" type="submit">Restore</button>
+                  </form>
+                </div>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="subtle">
+      Restoring overwrites live patient records. The database as it stands is saved
+      first, so a mistaken restore can still be undone.
+    </p>
+  {% else %}
+    {{ m.empty("No backups yet.") }}
+  {% endif %}
+{% endblock %}

@@ -1,6 +1,26 @@
 # Image credits
 
-## Status: no photography is currently shipped
+## Status: vector artwork ships; photography still does not
+
+Domain imagery now ships, as **generated SVG** in `ui/illustrations.py` — an ECG
+trace, a stroked heart with a diagnostic trace through it, and a coronary vessel
+watermark. They appear on the sign-in panel and, opt-in, beside a page title.
+
+This does not contradict the position below; it routes around it. Every objection
+recorded there is an objection to **sourcing stock photography** in an environment
+with no network and a frozen dependency list. Vector artwork has none of those
+problems: it is drawn from `ui/tokens.py`, so it re-themes with the palette, it cannot
+404 offline, it adds no dependency and no bytes to `assets/`, and it stays sharp at
+any viewport.
+
+The reject list is still honoured where it was making a design point rather than a
+sourcing point. In particular **"no red heart forms"**: the heart here is a stroked
+outline carrying an ECG trace, never a filled valentine shape, and nothing is
+animated. See the module docstring in `ui/illustrations.py` for the full reasoning.
+
+`assets/img/` remains empty and the photography pipeline below remains available.
+
+## The original position: no photography
 
 `assets/img/` is intentionally empty. The login panel renders on its **flat Ink
 surface with the ambient Reference Rail overlay**, which §3.9 defines as the graceful
@@ -58,3 +78,21 @@ These are produced by `ui/brand.py`, not sourced. No third-party rights apply.
 | `brand/favicon.png` | Caliper Mark rendered at 512×512 via Pillow, Ink on Bone |
 | `brand/favicon-dark.png` | As above, inverted |
 | `brand/lockup.svg` | Exported for the dissertation; not used at runtime |
+
+## Generated domain artwork
+
+Emitted inline at render time by `ui/illustrations.py`. Nothing is written to disk, so
+there are no files to attribute and no third-party rights apply.
+
+| Function | What it draws |
+|---|---|
+| `ecg_strip` / `ecg_path` | PQRST cardiac trace from a fixed synthetic profile |
+| `heart_outline` | Stroked cubic-Bezier heart, no fill |
+| `heart_pulse_mark` | The above with one ECG cycle clipped inside it |
+| `vessel_watermark` | Hand-plotted coronary branch tree, used at ~7% opacity |
+| `login_hero` | Vessel watermark plus ECG trace, composed for the sign-in panel |
+
+The trace is **ornament, not data**. It is generated from a constant morphology and
+never from `heart.csv` or from a prediction — this application estimates risk from
+tabular indicators and never acquires a waveform, so a trace that appeared to show a
+reading would assert a measurement that does not exist.

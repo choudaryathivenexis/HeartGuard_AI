@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% import "partials/macros.html" as m with context %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+  {{ m.pagehead(title, subtitle) }}
+  {% if users %}
+    <div class="tablewrap">
+      <table class="data">
+        <thead><tr><th>Username</th><th>Name</th><th>Role</th><th>Email</th>
+                   <th>Specialisation</th><th>Status</th><th></th></tr></thead>
+        <tbody>
+          {% for u in users %}{{ m.user_row(u, current_user) }}{% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    {{ m.empty("No accounts in this group yet.") }}
+  {% endif %}
+{% endblock %}

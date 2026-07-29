@@ -1,15 +1,21 @@
-# HeartGuard FYP - Python dependencies
+# HeartGuard AI - Python dependencies
 # Install with:  pip install -r requirements.txt
-# Tested with Python 3.11-3.13
+# Tested with Python 3.11-3.14
 #
-# NOTE: The trained model artifacts in models/ (*.pkl, scaler.pkl) were
-# serialized with scikit-learn 1.9.0. Loading them under an older version
-# raises InconsistentVersionWarning and may give invalid results, so the
-# scikit-learn floor below is set accordingly. If you retrain from scratch
-# (train_models.py), any recent version will work.
+# NOTE: the trained model artifacts in models/ (*.pkl, scaler.pkl) were serialized with
+# scikit-learn 1.9.0. Loading them under an older version raises
+# InconsistentVersionWarning and may give invalid results, so the floor below is set
+# accordingly. If you retrain from scratch (train_models.py), any recent version works.
 
-# --- Web app framework ---
-streamlit>=1.30
+# --- Web framework (backend) ---
+# Flask serves the application and renders Jinja templates. Jinja2, Werkzeug,
+# itsdangerous, click and blinker arrive as Flask's own dependencies.
+flask>=3.0
+
+# Production WSGI server. Flask's built-in server is Werkzeug's development
+# server: single-process and not hardened for exposure. Waitress rather than
+# gunicorn because gunicorn does not run on Windows.
+waitress>=3.0
 
 # --- Data handling ---
 pandas>=2.0
@@ -22,5 +28,12 @@ xgboost>=2.0
 # --- Explainable AI ---
 shap>=0.44
 
-# --- Plotting ---
+# --- Plotting and PDF ---
+# matplotlib renders both the chart images and the multi-page clinical PDF (via
+# PdfPages), so no separate PDF library is needed.
 matplotlib>=3.7
+
+# --- Fonts / favicon generation ---
+# Pillow arrives with matplotlib and is used by frontend/design/brand.py to render the
+# favicon. Listed explicitly because the code imports it directly.
+pillow>=10.0

@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% import "partials/macros.html" as m with context %}
+{% block title %}Patient management{% endblock %}
+{% block content %}
+  {{ m.pagehead("Patient management", "Patient records and their assessment timeline.") }}
+
+  <form method="get" class="row" style="margin-bottom:16px">
+    <input type="text" name="q" value="{{ q }}" placeholder="Search by name or code"
+           style="max-width:320px">
+    <button class="btn btn--secondary" type="submit">Search</button>
+  </form>
+
+  {% if rows %}
+    <div class="tablewrap">
+      <table class="data">
+        <thead><tr><th>Code</th><th>Name</th><th>Gender</th><th>Created</th><th></th></tr></thead>
+        <tbody>
+          {% for p in rows %}
+            <tr>
+              <td class="mono">{{ p.patient_code }}</td>
+              <td>{{ p.fullname }}</td>
+              <td>{{ "Male" if p.gender == 2 else "Female" }}</td>
+              <td class="mono">{{ p.created_at or "-" }}</td>
+              <td class="num">
+                <a class="btn btn--secondary btn--sm"
+                   href="{{ url_for('patients.detail', patient_ref=p.patient_code) }}">Open</a>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    {{ m.empty("No patient records yet. They are created automatically when you run an assessment.") }}
+  {% endif %}
+{% endblock %}

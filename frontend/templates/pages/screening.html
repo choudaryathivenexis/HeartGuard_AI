@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+{% import "partials/macros.html" as m with context %}
+{% block title %}Heart disease screening{% endblock %}
+
+{% block content %}
+  {{ m.pagehead("Heart disease screening",
+                "Cardiovascular risk estimated from eleven clinical indicators, with the
+                 model's operating point and applicability disclosed on every result.",
+                art=True) }}
+
+  {% if errors %}
+    <div class="alert alert--warning">
+      <div>
+        <div class="alert__title">Assessment not run</div>
+        <ul style="margin:6px 0 0 18px">
+          {% for e in errors %}<li>{{ e }}</li>{% endfor %}
+        </ul>
+      </div>
+    </div>
+  {% endif %}
+
+  <div class="grid grid--sidebarless">
+
+    <form method="post" action="{{ url_for('screening.assess') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="eyebrow">Patient</div>
+      <div class="grid grid--2">
+        <div class="field">
+          <label class="field__label" for="patient_code">Patient code</label>
+          <input id="patient_code" name="patient_code" type="text" required
+                 placeholder="e.g. PT-00123">
+        </div>
+        <div class="field">
+          <label class="field__label" for="patient_name">Patient name</label>
+          <input id="patient_name" name="patient_name" type="text" required
+                 placeholder="e.g. Ahmed Khan">
+        </div>
+      </div>
+
+      <div class="eyebrow">Demographics</div>
+      <div class="grid grid--2">
+        <div class="field">
+          <label class="field__label" for="age">Age (years)</label>
+          <input id="age" name="age" type="number" min="1" max="120" required
+                 value="{{ defaults.age }}">
+        </div>
+        <div class="field">
+          <label class="field__label" for="gender">Gender</label>
+          <select id="gender" name="gender">
+            <option value="2" selected>Male</option>
+            <option value="1">Female</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="eyebrow">Vitals</div>
+      <div class="grid grid--2">
+        <div class="field">
+          <label class="field__label" for="height">Height (cm)</label>
+          <input id="height" name="height" type="number" min="50" max="250" required
+                 value="{{ defaults.height }}">
+        </div>
+        <div class="field">
+          <label class="field__label" for="weight">Weight (kg)</label>
+          <input id="weight" name="weight" type="number" step="0.1" min="20" max="300"
+                 required value="{{ defaults.weight }}">
+        </div>
+        <div class="field">
+          <label class="field__label" for="ap_hi">Systolic BP (mmHg)</label>
+          <input id="ap_hi" name="ap_hi" type="number" min="50" max="300" required
+                 value="{{ defaults.ap_hi }}">
+        </div>
+        <div class="field">
+          <label class="field__label" for="ap_lo">Diastolic BP (mmHg)</label>
+          <input id="ap_lo" name="ap_lo" type="number" min="30" max="200" required
+                 value="{{ defaults.ap_lo }}">
+        </div>
+      </div>
+
+      <div class="eyebrow">Laboratory</div>
+      <div class="grid grid--2">
+        <div class="field">
+          <label class="field__label" for="cholesterol">Cholesterol</label>
+          <select id="cholesterol" name="cholesterol">
+            <option value="1" selected>Normal</option>
+            <option value="2">Above normal</option>
+            <option value="3">Well above normal</option>
+          </select>
+        </div>
+        <div class="field">
+          <label class="field__label" for="gluc">Glucose</label>
+          <select id="gluc" name="gluc">
+            <option value="1" selected>Normal</option>
+            <option value="2">Above normal</option>
+            <option value="3">Well above normal</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="eyebrow">Lifestyle</div>
+      <div class="grid grid--3">
+        {% for field, label in [('smoke','Smoker'), ('alco','Alcohol'), ('active','Physically active')] %}
+          <div class="field">
+            <label class="field__label" for="{{ field }}">{{ label }}</label>
+            <select id="{{ field }}" name="{{ field }}">
+              <option value="0" {% if defaults[field] == 0 %}selected{% endif %}>No</option>
+              <option value="1" {% if defaults[field] == 1 %}selected{% endif %}>Yes</option>
+            </select>
+          </div>
+        {% endfor %}
+      </div>
+
+      <div class="eyebrow">Model</div>
+      <div class="field">
+        <label class="field__label" for="model">Scoring model</label>
+        <select id="model" name="model">
+          {% for name in models %}
+            <option value="{{ name }}">{{ name }}{% if loop.first %} (All models){% endif %}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label class="field__label" for="notes">Clinical notes <span class="subtle">(optional)</span></label>
+        <textarea id="notes" name="notes" rows="3"></textarea>
+      </div>
+
+      <button class="btn btn--primary btn--block" type="submit">Run assessment</button>
+    </form>
+
+    <section>
+      {% if not result %}
+        <div class="empty">
+          <div style="color:var(--hg-border-strong);margin-bottom:12px">
+            {{ heart_mark(size=48, stroke_width=4.0)|safe }}
+          </div>
+          <strong>No assessment yet</strong>
+          <p class="muted" style="margin-top:6px">
+            Enter the patient's indicators and select Run assessment. The result appears
+            here with its operating point and reliability.
+          </p>
+        </div>
+      {% else %}
+        {% include "partials/verdict.html" %}
+      {% endif %}
+    </section>
+
+  </div>
+{% endblock %}

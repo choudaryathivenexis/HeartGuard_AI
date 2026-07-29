@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% import "partials/macros.html" as m with context %}
+{% block title %}Role and permission management{% endblock %}
+{% block content %}
+  {{ m.pagehead("Role & permission management",
+                "What each role may do, and who holds which role.") }}
+
+  <div class="panel">
+    <div class="eyebrow">Capability matrix</div>
+    <div class="tablewrap">
+      <table class="data">
+        <thead><tr><th>Capability</th>{% for r in roles %}<th>{{ r }}</th>{% endfor %}</tr></thead>
+        <tbody>
+          {% for label, allowed in capabilities %}
+            <tr>
+              <td>{{ label }}</td>
+              {% for r in roles %}
+                <td>{% if r in allowed %}Yes{% else %}<span class="muted">No</span>{% endif %}</td>
+              {% endfor %}
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="eyebrow">Reassign a role</div>
+    <form method="post" class="row">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <select name="user_id" required style="max-width:320px">
+        <option value="">Select a user</option>
+        {% for u in users %}
+          {% if u.id != current_user.id %}
+            <option value="{{ u.id }}">[{{ u.role }}] {{ u.fullname }} (@{{ u.username }})</option>
+          {% endif %}
+        {% endfor %}
+      </select>
+      <select name="role" required style="max-width:200px">
+        {% for r in roles %}<option value="{{ r }}">{{ r }}</option>{% endfor %}
+      </select>
+      <button class="btn btn--primary" type="submit">Apply role change</button>
+    </form>
+    <p class="subtle" style="margin-top:10px">
+      You cannot change your own role - an administrator who demotes themselves locks
+      the institution out of its own administration.
+    </p>
+  </div>
+{% endblock %}

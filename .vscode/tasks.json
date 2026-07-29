@@ -1,0 +1,57 @@
+{
+  // Ctrl+Shift+B runs the default task. These invoke the venv interpreter directly,
+  // because the `python` first on PATH lacks matplotlib, scikit-learn, xgboost and shap.
+  "version": "2.0.0",
+  "tasks": [
+    {
+      // The quickest way to get the app up, with auto-reload and no debugger.
+      "label": "Run HeartGuard (dev)",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "args": ["app.py"],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": { "HEARTGUARD_DEBUG": "1", "PORT": "5000" }
+      },
+      "group": { "kind": "build", "isDefault": true },
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Run HeartGuard (production, waitress)",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "args": ["wsgi.py"],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": { "HOST": "127.0.0.1", "PORT": "8000", "THREADS": "8" }
+      },
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "problemMatcher": []
+    },
+    {
+      // The whole suite. Each file is a standalone script that exits non-zero on
+      // failure, so a plain loop is the entire runner — there is no pytest dependency.
+      "label": "Run all tests",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "args": [
+        "-c",
+        "import glob,subprocess,sys; f=sorted(glob.glob('tests/test_*.py')); bad=[t for t in f if subprocess.run([sys.executable,t]).returncode]; print('\\nFAILED:',bad or 'none'); sys.exit(1 if bad else 0)"
+      ],
+      "options": { "cwd": "${workspaceFolder}" },
+      "group": { "kind": "test", "isDefault": true },
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "problemMatcher": []
+    },
+    {
+      // Regenerate the stylesheet after editing shared/tokens.py.
+      "label": "Rebuild the stylesheet",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "args": ["-m", "frontend.design.build_css"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    }
+  ]
+}
