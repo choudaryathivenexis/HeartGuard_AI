@@ -10,11 +10,47 @@ result.
 
 ```bash
 pip install -r requirements.txt
-python app.py                      # http://localhost:5000
+python app.py                      # development, http://localhost:5000
+python wsgi.py                     # production (waitress), port 8000
 ```
 
 Seed accounts are printed to the console the first time the database is created. They
 are never shown in the browser.
+
+Use `wsgi.py` for anything reachable by someone else. `app.py` runs Werkzeug's
+development server, which is single-process and not hardened against malformed or slow
+requests.
+
+---
+
+## Deploying (Render free plan)
+
+`render.yaml` is a Blueprint: in the Render dashboard choose **New → Blueprint** and
+pick this repository. Everything — runtime, build and start commands, health check,
+environment variables — comes from that file.
+
+**The free plan has no persistent disk, and that has consequences worth knowing before
+you show it to anyone:**
+
+| | behaviour |
+|---|---|
+| First boot | schema created, three seed accounts printed to the Render log |
+| While running | assessments save and behave normally |
+| After a redeploy or restart | **the database is recreated empty** |
+| After 15 minutes idle | instance sleeps; next request takes 30–60s to unpickle the models |
+
+That is the right trade for a demonstration URL and the wrong one for real records. To
+make data persist, the database has to move off the container — free managed Postgres
+(Neon, Supabase) is the usual answer, and `backend/repositories/` is the only package
+that would change.
+
+`HEARTGUARD_SECRET_KEY` is generated once by Render and held thereafter, so sessions
+survive a restart. Without it the application falls back to a key written into
+`system_settings.json`, which lives on the ephemeral disk — a new key on every boot, and
+every user silently signed out.
+
+Verified against a simulated fresh container (no database, no settings file): boots,
+seeds, signs in, scores a patient, and serves the PDF and both charts.
 
 ---
 

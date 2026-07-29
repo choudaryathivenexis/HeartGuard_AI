@@ -1,0 +1,73 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+#
+# Deploy: Render dashboard -> New -> Blueprint -> pick this repository.
+# Render reads this file and creates the service with everything below already set.
+#
+# WHAT THIS DEPLOYMENT IS, AND IS NOT
+# The free plan has NO persistent disk. The application stores everything in SQLite on
+# the container filesystem, which is recreated on every deploy and on every wake from
+# sleep. So:
+#
+#   * on first boot the schema is created and the three seed accounts are printed to
+#     the Render log — that is where to read them
+#   * assessments recorded through the running app are real and behave normally
+#   * they do NOT survive a redeploy or a restart
+#
+# That is the right trade for a demonstration URL. For data that persists, the database
+# has to move off the container — free managed Postgres (Neon, Supabase) is the usual
+# answer, and `backend/repositories/` is the only package that would change.
+#
+# Free instances also sleep after 15 minutes idle. The first request afterwards has to
+# unpickle five estimators, so expect roughly 30-60 seconds on a cold wake.
+
+services:
+  - type: web
+    name: heartguard-ai
+    runtime: python
+    plan: free
+    region: frankfurt          # nearest to the intended users; any region works
+
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    # wsgi.py runs waitress and already reads HOST/PORT/THREADS from the environment,
+    # so nothing needs a wrapper. Render injects PORT; the app binds to it.
+    startCommand: python wsgi.py
+
+    # `/` redirects to the sign-in page, which a health check may treat as a failure.
+    # Point it at a route that returns 200 outright.
+    healthCheckPath: /login
+
+    envVars:
+      # Render's newest fully-supported runtime. NOT 3.14 (used in development): the
+      # scientific wheels this project needs are not all published for it yet, and a
+      # build that has to compile scipy from source will exceed the free build timeout.
+      - key: PYTHON_VERSION
+        value: "3.13.4"
+
+      # Generated once by Render and held thereafter, so sessions survive a restart.
+      # Without it the app falls back to a key written into system_settings.json — a
+      # file on the ephemeral disk, which means a NEW key on every boot and every user
+      # silently signed out.
+      - key: HEARTGUARD_SECRET_KEY
+        generateValue: true
+
+      # Render terminates TLS, so the session cookie can carry the Secure flag. Setting
+      # this on a plain-HTTP host would stop the browser returning the cookie at all
+      # and nobody could sign in.
+      - key: HEARTGUARD_HTTPS
+        value: "1"
+
+      - key: HOST
+        value: "0.0.0.0"
+
+      # Four rather than the default eight. Peak measured footprint is ~333 MB with all
+      # five models loaded and a SHAP explanation computed, against a 512 MB limit;
+      # waitress threads share one process so they do not multiply that, but each
+      # in-flight matplotlib render does add to it.
+      - key: THREADS
+        value: "4"
+
+      # Never on in a deployment: Werkzeug's debugger is an interactive Python console
+      # served to anyone who triggers a traceback. Set explicitly rather than relying
+      # on the default.
+      - key: HEARTGUARD_DEBUG
+        value: "0"

@@ -22,8 +22,15 @@ pandas>=2.0
 numpy>=1.24
 
 # --- Machine learning ---
-scikit-learn>=1.9.0
-xgboost>=2.0
+# PINNED, not a floor. These two libraries WROTE the pickles in models/, and both
+# validate the version that unpickles them: scikit-learn raises
+# InconsistentVersionWarning and may return invalid results, and xgboost rejects a
+# Booster saved by a different major version outright. A floor of >=1.9.0 installs
+# whatever is newest at build time, so a deployment months from now would silently
+# score patients with mismatched estimators. Retraining with train_models.py is what
+# licenses moving these numbers.
+scikit-learn==1.9.0
+xgboost==3.3.0
 
 # --- Explainable AI ---
 shap>=0.44
