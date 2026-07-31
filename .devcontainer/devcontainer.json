@@ -1,0 +1,74 @@
+// HeartGuard AI — GitHub Codespaces / Dev Container definition.
+//
+// Opening this repository in a Codespace builds this container, installs the
+// dependencies, and starts the production server automatically. The forwarded port
+// then has to be made PUBLIC once, by hand — see .devcontainer/README.md. Port
+// visibility is deliberately not set here: devcontainer.json has no `visibility`
+// key, and inventing one would fail silently rather than loudly.
+//
+// WHY THE PRODUCTION SERVER AND NOT `python app.py`
+// A public forwarded port is reachable by anyone holding the URL. app.py runs
+// Werkzeug's development server, which is single-process and not hardened against
+// malformed or slow requests. wsgi.py runs waitress. Same application, safe server.
+{
+  "name": "HeartGuard AI",
+
+  // Pinned to 3.13 to match the version the model artifacts were validated against.
+  // `-bookworm` rather than the rolling tag so a rebuild months from now is the same
+  // image, not whatever Debian is current.
+  "image": "mcr.microsoft.com/devcontainers/python:3.13-bookworm",
+
+  // libgomp1 is the GNU OpenMP runtime. The xgboost wheel links against it and fails
+  // at import with "libgomp.so.1: cannot open shared object file" without it. Debian
+  // images that carry gcc usually already have it; installing is idempotent and cheap,
+  // and the alternative is an import error that looks like a broken model file.
+  "onCreateCommand": "sudo apt-get update && sudo apt-get install -y --no-install-recommends libgomp1 && sudo rm -rf /var/lib/apt/lists/*",
+
+  // updateContentCommand rather than postCreateCommand: this is the step a Codespaces
+  // prebuild can cache. Installing ~600 MB of scientific wheels takes minutes, and
+  // putting it here means a prebuilt Codespace starts with them already present.
+  "updateContentCommand": "pip install --no-cache-dir -r requirements.txt",
+
+  // Runs on every start, including when the Codespace is resumed after an idle stop,
+  // so the site comes back up without anyone opening a terminal. Backgrounded, because
+  // this command blocks the start sequence until it returns.
+  "postStartCommand": "nohup python wsgi.py > /tmp/heartguard.log 2>&1 &",
+
+  "forwardPorts": [8000],
+  "portsAttributes": {
+    "8000": {
+      "label": "HeartGuard AI",
+      "onAutoForward": "notify"
+    }
+  },
+
+  "containerEnv": {
+    "PORT": "8000",
+    "THREADS": "4",
+
+    // Codespaces serves the forwarded port through its own HTTPS proxy, so the
+    // client address arrives in X-Forwarded-For. Without this the rate limiter sees
+    // the proxy's address for every visitor and one wrong password would lock out
+    // everybody.
+    "HEARTGUARD_TRUST_PROXY": "1",
+
+    // The forwarded URL is HTTPS-only, so the session cookie can carry Secure. This
+    // is the opposite of the Dockerfile, which leaves it off because a local
+    // `docker run` is plain HTTP and a Secure cookie would never come back.
+    "HEARTGUARD_HTTPS": "1"
+  },
+
+  // No HEARTGUARD_SECRET_KEY here on purpose. A key committed to a public repository
+  // is not a secret. Left unset, the application generates one on first run and keeps
+  // it in system_settings.json, which is gitignored — so every Codespace gets its own.
+  // To pin one, add it as a Codespaces secret in the repository settings.
+
+  "customizations": {
+    "vscode": {
+      "extensions": ["ms-python.python"],
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/local/bin/python"
+      }
+    }
+  }
+}

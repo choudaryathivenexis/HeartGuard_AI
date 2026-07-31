@@ -43,10 +43,26 @@ requests.
 
 ## Deploying
 
-Two configurations ship with the project. **Hugging Face Spaces needs no payment
-details**; Render's free plan now asks for a card even though it does not charge one.
+Three configurations ship with the project. None of them require a card; all three trade
+something else away instead, and the table says what.
 
-### Hugging Face Spaces (no card required)
+| | card | always on | notes |
+|---|---|---|---|
+| GitHub Codespaces (`.devcontainer/`) | no | **no** | stops after 30 min idle; 60 core-hours/month |
+| Hugging Face Spaces (`Dockerfile`) | no | yes | **needs free CPU quota, which not every account has** |
+| Render (`render.yaml`) | **yes** | sleeps at 15 min | free plan asks for a card it does not charge |
+
+### GitHub Codespaces — best for a demo or viva
+
+`.devcontainer/devcontainer.json` builds the environment, installs the dependencies and
+starts `wsgi.py` on every Codespace start. Making the forwarded port public gives a
+`https://<name>-8000.app.github.dev` URL that works with your own machine switched off.
+
+The catch is the idle stop, and it is a real one: **a stopped Codespace does not wake
+when a visitor loads the URL** — they get an error page. Start it before it is looked at.
+Full instructions and limits: [`.devcontainer/README.md`](.devcontainer/README.md).
+
+### Hugging Face Spaces (check your quota first)
 
 Create a Space with **SDK: Docker**, then push this repository to it:
 
@@ -59,6 +75,21 @@ The `Dockerfile` and the YAML block at the top of this file are all the configur
 needed. Free CPU tier gives 2 vCPU and 16 GB RAM — comfortable, against a measured peak
 of 333 MB with all five models loaded and a SHAP explanation computed.
 
+**Confirm the account has free CPU quota before relying on this.** A Docker Space needs
+a `cpu-basic` allocation, and an account with none gets a Space stuck in `PAUSED` with
+
+```
+Quota exceeded for flavor cpu-basic (requested=1): current=0, limit=0
+```
+
+The push succeeds and the build never starts, which reads like a broken Dockerfile and
+is not one. Static Spaces are unaffected because they run no compute at all — that is
+why they stay free regardless. Check with:
+
+```bash
+curl -s https://huggingface.co/api/spaces/<user>/<space> | python -m json.tool
+```
+
 One detail the Dockerfile handles and which is easy to miss elsewhere: xgboost's wheel
 links against OpenMP at runtime, so `libgomp1` must be installed or the container builds
 cleanly and then dies on first import.
@@ -69,7 +100,7 @@ cleanly and then dies on first import.
 repository, Apply. Runtime, commands, health check and environment variables all come
 from that file.
 
-### Either way: there is no persistent disk
+### On the hosted platforms, there is no persistent disk
 
 **This matters before you show it to anyone:**
 
@@ -79,6 +110,10 @@ from that file.
 | While running | assessments save and behave normally |
 | After a redeploy or restart | **the database is recreated empty** |
 | After 15 minutes idle | instance sleeps; next request takes 30–60s to unpickle the models |
+
+Codespaces is the exception: `/workspaces` is a real disk that survives an idle stop, so
+`heartguard.db` is still there when it restarts. It goes away when the Codespace itself
+is deleted — automatic after 30 days unused.
 
 That is the right trade for a demonstration URL and the wrong one for real records. To
 make data persist, the database has to move off the container — free managed Postgres
