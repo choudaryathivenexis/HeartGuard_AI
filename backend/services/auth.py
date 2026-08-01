@@ -72,7 +72,8 @@ def registration_allowed() -> bool:
     return bool(config.get_setting("allow_registration", True))
 
 
-def login(username: str, password: str) -> tuple[dict | None, str | None]:
+def login(username: str, password: str,
+          allowed_roles: tuple[str, ...] | None = None) -> tuple[dict | None, str | None]:
     """
     Validate credentials. Returns (user, error).
 
@@ -80,11 +81,39 @@ def login(username: str, password: str) -> tuple[dict | None, str | None]:
     'banned'. A suspended account gets a DIFFERENT message from a wrong password on
     purpose: the user is legitimate and needs to know to contact an administrator
     rather than keep retrying a password that is already correct.
+
+    `allowed_roles` is the set of roles the entrance being used admits; None admits
+    every role. It exists so that /admin/login and /superadmin/login can be separate
+    doors without becoming a second authentication path — there is one password check
+    in this application, and adding a parallel one is how the two drift until only one
+    of them rate-limits, or logs, or honours a ban.
+
+    TWO PROPERTIES THAT LOOK LIKE DETAILS AND ARE NOT:
+
+    The role is checked AFTER the password, and refusal returns the byte-identical
+    "Incorrect username or password." A message such as "that account is not an
+    administrator" answers two questions for whoever typed it — the username exists,
+    and the password was right — which turns /superadmin/login into a directory of
+    privileged accounts and a free password oracle. The caller cannot distinguish the
+    two cases either, so it cannot leak what this function refuses to.
+
+    No session is created on refusal. Establishing one and tearing it down afterwards
+    would leave a window in which a wrong-door sign-in is a real sign-in, and any early
+    return added later inside that window becomes privilege escalation.
     """
     user, status = db.validate_login(username, password)
     if status == "banned":
         return None, "This account has been suspended. Contact an administrator."
     if not user or status != "ok":
+        return None, "Incorrect username or password."
+    if allowed_roles is not None and user["role"] not in allowed_roles:
+        # Recorded because it is worth seeing: this line is only ever reached by
+        # someone holding a CORRECT password. That is a real account either at the
+        # wrong door or being probed with stolen credentials, and neither is visible
+        # anywhere else — the user is told nothing, by design.
+        db.log_activity(user["id"], user["username"], "Login refused",
+                        f"Correct credentials at an entrance restricted to "
+                        f"{', '.join(allowed_roles)}; this account is {user['role']}.")
         return None, "Incorrect username or password."
     session.clear()
     session["user_id"] = user["id"]

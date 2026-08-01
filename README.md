@@ -35,6 +35,29 @@ python wsgi.py                     # production (waitress), port 8000
 Seed accounts are printed to the console the first time the database is created. They
 are never shown in the browser.
 
+### Sign-in entrances
+
+| path | admits | offers registration |
+|---|---|---|
+| `/login` | any role | yes, as Doctor |
+| `/admin/login` | Admin | no |
+| `/superadmin/login` | SuperAdmin | no |
+
+Three doors onto one authentication path — the password check, the ban check, the
+lockout counter and the audit entry are the same code at all three, so they cannot
+drift into one door that forgets to rate-limit. The portal decides only which roles it
+admits and what the page says.
+
+**These are entrances, not a security boundary.** What a signed-in user may open is
+decided by the role ACL in `backend/services/auth.py`, on every request, whichever door
+they used. The URLs are in this repository and are not secret.
+
+A correct password at the wrong door is refused with the byte-identical response a wrong
+password gets — anything else confirms both the username and the password to whoever
+typed them — and is written to the activity log, since only a genuine credential can
+reach that branch. Roles are jobs rather than ranks here, so a SuperAdmin is refused at
+`/admin/login`; every portal links to the other two so nobody is stuck at the wrong one.
+
 Use `wsgi.py` for anything reachable by someone else. `app.py` runs Werkzeug's
 development server, which is single-process and not hardened against malformed or slow
 requests.

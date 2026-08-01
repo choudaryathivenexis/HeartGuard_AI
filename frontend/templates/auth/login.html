@@ -1,12 +1,16 @@
-{# Sign in / register. One template, two modes — the panel and the artwork are
-   identical either way, so duplicating the file would mean maintaining the brand side
-   twice. #}
+{# Sign in / register, for every entrance. One template — the artwork, the trust
+   markers and the form are identical at all three doors, and the only differences are
+   the heading, the badge and where the form posts. Copying the file per portal would
+   mean three places to fix the next time the sign-in form changes, and two of them
+   would be missed.
+
+   `portal` is always supplied by the view; see PORTALS in backend/web/auth.py. #}
 <!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{ 'Register' if mode == 'register' else 'Sign in' }} · HeartGuard AI</title>
+  <title>{{ 'Register' if mode == 'register' else portal.heading }} · HeartGuard AI</title>
   <link rel="icon" href="{{ url_for('static', filename='img/favicon.png') }}">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -100,9 +104,14 @@
           <button class="btn btn--primary btn--block" type="submit">Create account</button>
         </form>
       {% else %}
-        <h1 style="font-size:26px">Sign in</h1>
-        <p class="muted" style="font-size:13px">Access the cardiovascular screening console.</p>
-        <form method="post" action="{{ url_for('auth.login') }}">
+        {% if portal.badge %}
+          <p style="margin-bottom:10px">
+            <span class="chip chip--neutral">{{ portal.badge }}</span>
+          </p>
+        {% endif %}
+        <h1 style="font-size:26px">{{ portal.heading }}</h1>
+        <p class="muted" style="font-size:13px">{{ portal.blurb }}</p>
+        <form method="post" action="{{ url_for(portal.endpoint) }}">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="next" value="{{ request.args.get('next', '') }}">
           <div class="field">
@@ -120,6 +129,18 @@
         <p class="auth__hint">
           First run? The seeded accounts were printed to the server console when the
           database was created.
+        </p>
+      {% endif %}
+
+      {# The way out of the wrong door. Refusals cannot say "you are an administrator,
+         try the other page" without confirming the username and the password to
+         whoever typed them, so the route to the right entrance is offered to everyone,
+         unconditionally, and tells nobody anything they did not already know. #}
+      {% if other_portals %}
+        <p class="auth__hint">
+          {% for other in other_portals %}
+            <a href="{{ url_for(other.endpoint) }}">{{ other.link_label }}</a>{% if not loop.last %} <span aria-hidden="true">·</span> {% endif %}
+          {% endfor %}
         </p>
       {% endif %}
     </div>

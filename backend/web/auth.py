@@ -12,6 +12,76 @@ from backend.web import hardening
 bp = Blueprint("auth", __name__)
 
 
+# ════════════════════════════════════════════════════════════════════════
+# Sign-in entrances
+# ════════════════════════════════════════════════════════════════════════
+# Three doors onto ONE authentication path. Everything that makes a sign-in safe — the
+# password check, the ban check, the lockout counter, the audit entry — happens in
+# `services.auth.login` and `hardening`, and is reached identically from all three.
+# The portal only decides which roles the door admits and what the page says.
+#
+# WHAT THIS IS NOT: it is not an extra security boundary. What a signed-in user may
+# open is decided by the role ACL in `services.auth.NAV`, on every request, whichever
+# door they came through. Anyone claiming a separate URL protects the administration
+# pages has the model backwards — the URL is not a secret, it is in this repository.
+# The value here is a focused entrance, no self-registration on it, and an audit trail
+# of correct credentials arriving at the wrong door.
+#
+# ROLES ARE NOT RANKED. A SuperAdmin is refused at /admin/login, because this codebase
+# treats Admin and SuperAdmin as different jobs rather than levels — the same rule that
+# keeps the clinical pages off an administrator's menu (see services/auth.py). The
+# links at the foot of every portal are what stops that being a dead end: someone at
+# the wrong door is one click from the right one, without the page ever having to admit
+# which one is theirs.
+#
+# /login still admits every role. Making it Doctor-only would mean an administrator who
+# forgets which door is theirs is told their password is wrong — the message has to be
+# identical to a real failure — and eight of those is a five-minute lockout on correct
+# credentials. That is a support call caused by the login page, in exchange for no
+# security the ACL does not already provide.
+PORTAL_ORDER = ("clinical", "admin", "superadmin")
+
+PORTALS = {
+    "clinical": {
+        "key": "clinical",
+        "endpoint": "auth.login",
+        "badge": None,
+        "heading": "Sign in",
+        "blurb": "Access the cardiovascular screening console.",
+        "link_label": "Clinician sign-in",
+        "roles": None,            # every role
+        "allow_register": True,
+    },
+    "admin": {
+        "key": "admin",
+        "endpoint": "auth.admin_login",
+        "badge": "Administration",
+        "heading": "Administrator sign-in",
+        "blurb": "Doctor accounts, prediction records, the training dataset and "
+                 "institutional analytics.",
+        "link_label": "Administrator sign-in",
+        "roles": (auth_service.ROLE_ADMIN,),
+        "allow_register": False,
+    },
+    "superadmin": {
+        "key": "superadmin",
+        "endpoint": "auth.superadmin_login",
+        "badge": "System administration",
+        "heading": "System administrator sign-in",
+        "blurb": "Roles and permissions, model management, system settings, activity "
+                 "logs and backups.",
+        "link_label": "System administrator sign-in",
+        "roles": (auth_service.ROLE_SUPERADMIN,),
+        "allow_register": False,
+    },
+}
+
+
+def _other_portals(current_key: str) -> list[dict]:
+    """The other entrances, for the links at the foot of the card."""
+    return [PORTALS[key] for key in PORTAL_ORDER if key != current_key]
+
+
 def _login_facts() -> list[tuple[str, str]]:
     """
     The three trust markers on the sign-in panel.
@@ -54,8 +124,15 @@ def index():
     return redirect(url_for("auth.login"))
 
 
-@bp.route("/login", methods=["GET", "POST"])
-def login():
+def _sign_in(portal: dict):
+    """
+    Handle one sign-in entrance. Shared by all three portals.
+
+    The lockout is consulted BEFORE the password is checked and counted for every
+    refusal, including a wrong-door one. The counter lives in `hardening` and is keyed
+    on (client address, username) with no endpoint in the key, so the three portals
+    share one budget of attempts — an extra door must not mean extra guesses.
+    """
     if auth_service.current_user():
         return redirect(url_for("dashboard.index"))
 
@@ -72,10 +149,11 @@ def login():
             error = (f"Too many failed attempts. Try again in "
                      f"{max(1, locked // 60)} minute(s).")
         else:
-            user, error = auth_service.login(username, password)
+            user, error = auth_service.login(username, password,
+                                             allowed_roles=portal["roles"])
             if user is None:
                 hardening.record_failure(username)
-            if user:
+            else:
                 hardening.clear_failures(username)
                 nxt = request.args.get("next") or request.form.get("next")
                 # Only relative paths are honoured. Accepting an absolute URL here is
@@ -86,9 +164,34 @@ def login():
                 return redirect(url_for("dashboard.index"))
 
     facts, rows = _login_facts()
+    # Self-registration is offered on the clinical entrance only. `register` fixes the
+    # role to Doctor, so a Register tab on an administrator's page would promise an
+    # account that cannot open the page it was created from.
+    allow_register = (portal["allow_register"]
+                      and auth_service.registration_allowed())
     return render_template("auth/login.html", mode="login", error=error,
-                           facts=facts, rows=rows,
-                           registration_allowed=auth_service.registration_allowed())
+                           facts=facts, rows=rows, portal=portal,
+                           other_portals=_other_portals(portal["key"]),
+                           registration_allowed=allow_register)
+
+
+@bp.route("/login", methods=["GET", "POST"])
+def login():
+    return _sign_in(PORTALS["clinical"])
+
+
+@bp.route("/admin/login", methods=["GET", "POST"])
+def admin_login():
+    # Deliberately NOT under the admin blueprint, which is guarded per view by
+    # `roles_required`. A sign-in page living behind the guard that redirects to the
+    # sign-in page is a redirect loop; keeping it in this blueprint means the guard and
+    # the door can never end up pointing at each other.
+    return _sign_in(PORTALS["admin"])
+
+
+@bp.route("/superadmin/login", methods=["GET", "POST"])
+def superadmin_login():
+    return _sign_in(PORTALS["superadmin"])
 
 
 @bp.route("/register", methods=["GET", "POST"])
@@ -125,8 +228,12 @@ def register():
             error = message or "That username is already taken."
 
     facts, rows = _login_facts()
+    # Registration belongs to the clinical entrance, so the tabs and the footer links
+    # match the page the "Sign in" tab goes back to.
     return render_template("auth/login.html", mode="register", error=error,
                            form=form, facts=facts, rows=rows,
+                           portal=PORTALS["clinical"],
+                           other_portals=_other_portals("clinical"),
                            registration_allowed=True)
 
 
