@@ -1,13 +1,12 @@
 """Sign in, register, sign out."""
 from __future__ import annotations
 
-import re
-
 from flask import (Blueprint, flash, redirect, render_template, request,
                    url_for)
 
 from backend import repositories as db
 from backend.services import auth as auth_service
+from backend.services import validation
 from backend.web import hardening
 
 bp = Blueprint("auth", __name__)
@@ -185,54 +184,6 @@ def superadmin_login():
     return _sign_in(PORTALS["superadmin"])
 
 
-# ════════════════════════════════════════════════════════════════════════
-# Registration validation
-# ════════════════════════════════════════════════════════════════════════
-# THE SAME RULES THE BROWSER ENFORCES, enforced again here. The `required`,
-# `minlength`, `maxlength` and `pattern` attributes on the form are a courtesy: they put
-# the message beside the field instead of after a round trip. They are also two lines of
-# devtools away from being deleted, and curl never sees them at all. So every constraint
-# below has a twin in frontend/templates/auth/login.html, and this is the one that
-# decides.
-#
-# The messages name the field and the rule. "Invalid input" tells a user that something
-# is wrong and leaves them to find out what by trial.
-_USERNAME_RE = re.compile(r"^[A-Za-z0-9._-]{3,32}$")
-
-# Deliberately permissive. A regex that tries to decide whether an address is
-# deliverable rejects real ones — plus-addressing, new TLDs, non-ASCII local parts —
-# and the only test that actually proves an address works is sending mail to it. This
-# checks the shape a typo breaks: one @, something either side, a dot in the domain.
-_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-
-_PASSWORD_MIN = 8
-_PASSWORD_MAX = 128          # bcrypt-style truncation is not in play, but an unbounded
-                             # field is an unbounded hash input
-
-
-def _validation_error(form: dict, password: str, confirm: str) -> str | None:
-    """The first problem with a registration submission, or None if it is sound."""
-    if not form["fullname"] or not form["username"] or not form["email"]:
-        return "Full name, username and email are all required."
-    if not (2 <= len(form["fullname"]) <= 80):
-        return "Enter a full name between 2 and 80 characters."
-    if not _USERNAME_RE.match(form["username"]):
-        return ("Usernames are 3 to 32 characters and may contain letters, digits, "
-                "dot, underscore or hyphen only.")
-    if len(form["email"]) > 120 or not _EMAIL_RE.match(form["email"]):
-        return "Enter a valid email address, for example name@hospital.org"
-    if len(form["specialisation"]) > 80:
-        return "Keep the specialisation under 80 characters."
-    if not password:
-        return "Choose a password."
-    if not (_PASSWORD_MIN <= len(password) <= _PASSWORD_MAX):
-        return (f"Use a password between {_PASSWORD_MIN} and {_PASSWORD_MAX} "
-                f"characters.")
-    if password != confirm:
-        return "The two passwords do not match."
-    return None
-
-
 @bp.route("/register", methods=["GET", "POST"])
 def register():
     if not auth_service.registration_allowed():
@@ -246,7 +197,10 @@ def register():
                 for k in ("username", "fullname", "email", "specialisation")}
         password = request.form.get("password") or ""
         confirm = request.form.get("confirm") or ""
-        error = _validation_error(form, password, confirm)
+        # The field rules live in services/validation.py so that this form and the
+        # profile form cannot disagree about what a valid password is — they already
+        # had, before that module existed.
+        error = validation.registration_error(form, password, confirm)
         if error is None:
             # The role is FIXED to Doctor and never read from the form. A role field in
             # a public registration form is a privilege-escalation hole regardless of

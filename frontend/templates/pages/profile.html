@@ -7,27 +7,63 @@
   <div class="grid grid--2">
     <form method="post" class="panel">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      {# Same rules as registration, from the same module — see `rules` in
+         backend/__init__.py. This form used to carry no constraints at all beyond
+         `required`, so an account created under the full policy could be edited
+         straight past it. #}
       <div class="field">
-        <label class="field__label" for="fullname">Full name</label>
+        <label class="field__label" for="fullname">
+          Full name <span class="field__req" aria-hidden="true">*</span>
+        </label>
         <input id="fullname" name="fullname" type="text" required
-               value="{{ current_user.fullname }}">
+               minlength="{{ rules.NAME_MIN }}" maxlength="{{ rules.NAME_MAX }}"
+               value="{{ current_user.fullname }}" autocomplete="name"
+               title="Your name as it should appear on a clinical report.">
       </div>
       <div class="field">
-        <label class="field__label" for="email">Email</label>
-        <input id="email" name="email" type="email" required value="{{ current_user.email }}">
+        <label class="field__label" for="email">
+          Email <span class="field__req" aria-hidden="true">*</span>
+        </label>
+        <input id="email" name="email" type="email" required
+               maxlength="{{ rules.EMAIL_MAX }}" spellcheck="false"
+               value="{{ current_user.email }}" autocomplete="email"
+               title="A working address, e.g. name@hospital.org">
       </div>
       <div class="field">
-        <label class="field__label" for="specialisation">Specialisation</label>
+        <label class="field__label" for="specialisation">
+          Specialisation <span class="subtle">(optional)</span>
+        </label>
         <input id="specialisation" name="specialisation" type="text"
-               value="{{ current_user.specialisation or '' }}">
+               maxlength="{{ rules.SPECIALISATION_MAX }}"
+               value="{{ current_user.specialisation or '' }}"
+               placeholder="Cardiologist">
       </div>
       <div class="field">
-        <label class="field__label" for="password">New password <span class="subtle">(leave blank to keep)</span></label>
-        <input id="password" name="password" type="password" autocomplete="new-password">
+        <label class="field__label" for="password">
+          New password <span class="subtle">(leave blank to keep)</span>
+        </label>
+        {# NOT `required`: this form saves a name or an email far more often than it
+           changes a password. The rules apply only once something is typed, which is
+           what the server does too. #}
+        <input id="password" name="password" type="password"
+               minlength="{{ rules.PASSWORD_MIN }}"
+               maxlength="{{ rules.PASSWORD_MAX }}"
+               pattern="{{ rules.PASSWORD_PATTERN }}"
+               autocomplete="new-password"
+               title="At least 8 characters, including at least one letter and one digit.">
+        <div class="field__hint">
+          At least {{ rules.PASSWORD_MIN }} characters, including a letter and a digit.
+          Symbols are allowed and encouraged.
+        </div>
       </div>
       <div class="field">
         <label class="field__label" for="confirm">Confirm new password</label>
-        <input id="confirm" name="confirm" type="password" autocomplete="new-password">
+        <input id="confirm" name="confirm" type="password"
+               minlength="{{ rules.PASSWORD_MIN }}"
+               maxlength="{{ rules.PASSWORD_MAX }}"
+               autocomplete="new-password"
+               title="Type the same new password again.">
+        <div class="field__hint">Only needed if you are changing your password.</div>
       </div>
       <button class="btn btn--primary" type="submit">Save changes</button>
     </form>

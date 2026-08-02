@@ -5,6 +5,7 @@ from flask import Blueprint, flash, redirect, render_template, request, url_for
 
 from backend import repositories as db
 from backend.services import auth as auth_service
+from backend.services import validation
 
 bp = Blueprint("account", __name__, url_prefix="/account")
 
@@ -20,12 +21,15 @@ def profile():
         password = request.form.get("password") or ""
         confirm = request.form.get("confirm") or ""
 
-        if not fullname or not email:
-            flash("Name and email are both required.", "warning")
-        elif password and password != confirm:
-            flash("The two passwords do not match.", "warning")
-        elif password and len(password) < 8:
-            flash("Use a password of at least 8 characters.", "warning")
+        # The SAME rules registration uses, from the same module. This form previously
+        # checked only that a name and an email were non-empty and that a new password
+        # was 8 characters — so an account created under the full policy could then be
+        # edited straight past it. A password policy that applies only at registration
+        # is a policy every existing account can walk around.
+        problem = validation.profile_error(fullname, email, specialisation,
+                                           password, confirm)
+        if problem:
+            flash(problem, "warning")
         else:
             # The role is never taken from this form. A user editing their own profile
             # must not be able to promote themselves by posting a role field.

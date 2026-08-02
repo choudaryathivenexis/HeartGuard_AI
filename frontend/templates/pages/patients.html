@@ -5,7 +5,12 @@
   {{ m.pagehead("Patient management", "Patient records and their assessment timeline.") }}
 
   <form method="get" class="row" style="margin-bottom:16px">
+    {# aria-label rather than a visible label: the placeholder is the only cue, and a
+       placeholder is not a label — it disappears the moment anything is typed and is
+       not announced as the field's name. maxlength keeps a pasted document out of a
+       GET query string. #}
     <input type="text" name="q" value="{{ q }}" placeholder="Search by name or code"
+           aria-label="Search patients by name or code" maxlength="60"
            style="max-width:320px">
     <button class="btn btn--secondary" type="submit">Search</button>
   </form>

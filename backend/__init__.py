@@ -119,6 +119,7 @@ def _register_context(app: Flask) -> None:
     """
     from backend.ml import versioning
     from backend.services import auth as auth_service
+    from backend.services import validation
     from frontend.design import brand, icons, illustrations
     from shared import formatting as fmt
 
@@ -135,6 +136,11 @@ def _register_context(app: Flask) -> None:
             "app_version": "HeartGuard AI v2.1",
             "model_version": version,
             "fmt": fmt,
+            # The field rules, so a template's `pattern` and `minlength` are the SAME
+            # strings the server checks rather than a copy of them. A copy is how a
+            # form ends up accepting what the server rejects, with the user told only
+            # that something is wrong.
+            "rules": validation,
             # dark=None makes the lockup follow the CSS variables rather than baking a
             # colour, which is what kept it legible when the surface changed.
             "brand_lockup": lambda size=22, wordmark=16: brand.lockup(

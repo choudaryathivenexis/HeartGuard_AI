@@ -353,7 +353,14 @@ BAD_CASES = [
     ("a username with a symbol", {"username": "drop;table"}),
     ("a malformed email", {"email": "not-an-email"}),
     ("a seven-character password", {"password": "short12", "confirm": "short12"}),
-    ("mismatched passwords", {"confirm": "somethingelse"}),
+    # "Alphanumeric" is enforced as MUST CONTAIN a letter and a digit — symbols stay
+    # legal, because banning them shrinks the search space an attacker has to cover.
+    # See the note at the top of backend/services/validation.py.
+    ("a password with no digit", {"password": "onlylettershere",
+                                  "confirm": "onlylettershere"}),
+    ("a password with no letter", {"password": "1234567890",
+                                   "confirm": "1234567890"}),
+    ("mismatched passwords", {"confirm": "somethingelse12"}),
     ("a one-character full name", {"fullname": "X"}),
     ("an empty full name", {"fullname": ""}),
 ]
@@ -383,6 +390,21 @@ else:
             check(f"  and {label} is explained to the user",
                   b"alert--danger" in r.data,
                   "refused with no message on the page")
+
+    # A symbol-bearing password must be ACCEPTED. Without this, "no digit" and "no
+    # letter" passing would be equally consistent with a rule that banned symbols —
+    # which is the wrong rule, and the one this deliberately does not implement.
+    with app.test_client() as c:
+        _sym = dict(_VALID)
+        _sym.update({"username": "_valtest_sym",
+                     "password": "Str0ng!Pass#2026", "confirm": "Str0ng!Pass#2026"})
+        post(c, "/register", _sym, follow_redirects=True)
+        _made = next((u for u in db.get_all_users()
+                      if u["username"] == "_valtest_sym"), None)
+        check("a password containing symbols is accepted", _made is not None,
+              "symbols are being rejected, which weakens every password")
+        if _made:
+            db.delete_user(_made["id"], "portal-test")
 
     # The control: the same payload with nothing wrong must succeed, or the tests above
     # would pass just as well against a form that refuses everybody.

@@ -9,6 +9,7 @@ same patient a second time.
 from __future__ import annotations
 
 import io
+import re
 
 from flask import (Blueprint, Response, flash, redirect, render_template,
                    request, send_file, session, url_for)
@@ -31,6 +32,14 @@ _NUMERIC = {"age": int, "height": int, "weight": float, "ap_hi": int, "ap_lo": i
             "gender": int, "cholesterol": int, "gluc": int, "smoke": int,
             "alco": int, "active": int}
 
+# Kept as a string as well as a compiled pattern: the template puts the same source
+# text in the field's `pattern` attribute, so the browser and the server cannot come to
+# different conclusions about the same code. Slash is allowed because ward and clinic
+# numbering commonly uses it.
+PATIENT_CODE_PATTERN = r"[A-Za-z0-9._/-]{2,32}"
+_PATIENT_CODE_RE = re.compile(rf"^{PATIENT_CODE_PATTERN}$")
+PATIENT_NAME_MAX = 80
+
 
 def _parse(form) -> tuple[dict, list[str]]:
     """Coerce the posted form. Bad numbers are reported, never silently defaulted."""
@@ -44,8 +53,21 @@ def _parse(form) -> tuple[dict, list[str]]:
             values[field] = cast(float(raw))
         except ValueError:
             errors.append(f"{field.replace('_', ' ').title()} must be a number.")
-    values["patient_code"] = (form.get("patient_code") or "").strip()
-    values["patient_name"] = (form.get("patient_name") or "").strip()
+    # The two text fields, checked rather than taken as given. `patient_code` is a
+    # UNIQUE NOT NULL column and the identifier a clinician uses to find this person
+    # again, so an empty one is not a cosmetic problem — it is a record that cannot be
+    # looked up. Neither field had any length bound before, on either side of the wire.
+    values["patient_code"] = code = (form.get("patient_code") or "").strip()
+    values["patient_name"] = name = (form.get("patient_name") or "").strip()
+    if not code:
+        errors.append("Patient code is required.")
+    elif not _PATIENT_CODE_RE.match(code):
+        errors.append("Patient code may be 2 to 32 characters: letters, digits, "
+                      "hyphen, underscore, dot or slash.")
+    if not name:
+        errors.append("Patient name is required.")
+    elif not (2 <= len(name) <= 80):
+        errors.append("Patient name must be between 2 and 80 characters.")
     return values, errors
 
 
@@ -58,6 +80,10 @@ def new():
                            models=service.model_choices(),
                            ranges=applicability.load_input_ranges().get("features", {}),
                            result=result,
+                           # Passed in rather than written into the template, so the
+                           # browser's check and this module's check are one string.
+                           patient_code_pattern=PATIENT_CODE_PATTERN,
+                           patient_name_max=PATIENT_NAME_MAX,
                            errors=session.pop("last_errors", None))
 
 

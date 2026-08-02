@@ -317,14 +317,35 @@ if admin:
               db.get_user_by_id(me["id"])["fullname"] == "Workflow Test Name",
               db.get_user_by_id(me["id"])["fullname"])
 
-        # A mismatched password pair must change nothing.
+        # THE PROFILE FORM MUST ENFORCE THE REGISTRATION POLICY.
+        #
+        # It used to check only that a new password was 8 characters, while
+        # registration checked far more — so an account created under the full policy
+        # could be edited straight past it. Each case below must leave the existing
+        # password working; if any of them takes effect, the sign-in that follows fails
+        # and says so.
+        WEAK = [
+            ("a mismatched pair", "abcdefgh12", "different12"),
+            ("a password with no digit", "onlylettershere", "onlylettershere"),
+            ("a password with no letter", "1234567890", "1234567890"),
+            ("a seven-character password", "short12", "short12"),
+        ]
+        for label, pw, confirm in WEAK:
+            post(c, "/account/profile",
+                 {"fullname": "Workflow Test Name", "email": me["email"],
+                  "specialisation": "", "password": pw, "confirm": confirm},
+                 follow_redirects=True)
+            _ok, status = db.validate_login(admin[0], admin[1])
+            check(f"profile refuses {label}", status == "ok",
+                  f"the password was changed; sign-in status is now {status!r}")
+
+        # An invalid email must not save either — this form had no email rule at all.
         post(c, "/account/profile",
-             {"fullname": "Workflow Test Name", "email": me["email"],
-              "specialisation": "", "password": "abcdefgh", "confirm": "different"},
-             follow_redirects=True)
-        still_valid, status = db.validate_login(admin[0], admin[1])
-        check("a mismatched password pair leaves the password alone",
-              status == "ok", f"sign-in status is now {status!r}")
+             {"fullname": "Workflow Test Name", "email": "not-an-email",
+              "specialisation": ""}, follow_redirects=True)
+        check("profile refuses a malformed email",
+              db.get_user_by_id(me["id"])["email"] == me["email"],
+              str(db.get_user_by_id(me["id"])["email"]))
 
     db.update_user_profile(me["id"], original_name, me["email"],
                            me.get("specialisation") or "")

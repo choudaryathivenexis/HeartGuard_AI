@@ -26,14 +26,29 @@
       <div class="eyebrow">Patient</div>
       <div class="grid grid--2">
         <div class="field">
-          <label class="field__label" for="patient_code">Patient code</label>
+          <label class="field__label" for="patient_code">
+            Patient code <span class="field__req" aria-hidden="true">*</span>
+          </label>
+          {# The pattern is the same string backend/web/screening.py matches against.
+             This is the identifier a repeat visit is attached to, so a mistyped one
+             does not fail — it silently creates a second record for one person. #}
           <input id="patient_code" name="patient_code" type="text" required
-                 placeholder="e.g. PT-00123">
+                 minlength="2" maxlength="32" spellcheck="false"
+                 pattern="{{ patient_code_pattern }}"
+                 placeholder="e.g. PT-00123"
+                 title="2 to 32 characters: letters, digits, hyphen, underscore, dot or slash.">
+          <div class="field__hint">
+            Re-using a code attaches this assessment to the same patient.
+          </div>
         </div>
         <div class="field">
-          <label class="field__label" for="patient_name">Patient name</label>
+          <label class="field__label" for="patient_name">
+            Patient name <span class="field__req" aria-hidden="true">*</span>
+          </label>
           <input id="patient_name" name="patient_name" type="text" required
-                 placeholder="e.g. Ahmed Khan">
+                 minlength="2" maxlength="{{ patient_name_max }}"
+                 autocomplete="off" placeholder="e.g. Ahmed Khan"
+                 title="The patient's name, 2 to 80 characters.">
         </div>
       </div>
 

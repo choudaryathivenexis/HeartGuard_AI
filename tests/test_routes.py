@@ -232,6 +232,28 @@ if doctor:
         check("a verdict is shown", b"Screening result" in r.data)
         check("the assessment was persisted", len(db.get_predictions()) == before + 1)
 
+        # The two text fields are validated too, and neither used to be. A blank or
+        # malformed patient code is not cosmetic: it is the identifier a repeat visit
+        # attaches to, and the column is UNIQUE NOT NULL.
+        for label, override in [
+            ("an empty patient code", {"patient_code": ""}),
+            ("a patient code with spaces", {"patient_code": "PT 001"}),
+            ("a one-character patient name", {"patient_name": "X"}),
+            ("an empty patient name", {"patient_name": ""}),
+        ]:
+            payload = {
+                "patient_code": "PT-ROUTETEST", "patient_name": "Route Test Patient",
+                "age": 68, "gender": 2, "height": 172, "weight": 96.0,
+                "ap_hi": 165, "ap_lo": 98, "cholesterol": 3, "gluc": 2,
+                "smoke": 1, "alco": 0, "active": 0, "model": "Ensemble Voting",
+            }
+            payload.update(override)
+            count_before = len(db.get_predictions())
+            post(c, "/screening/", data=payload, follow_redirects=True)
+            check(f"{label} is refused",
+                  len(db.get_predictions()) == count_before,
+                  "an assessment was stored against an invalid patient identifier")
+
         # Refusal path: an impossible blood pressure must be refused, not scored.
         r = post(c, "/screening/", data={
             "patient_code": "PT-ROUTETEST", "patient_name": "Route Test Patient",

@@ -85,7 +85,7 @@
               Full name <span class="field__req" aria-hidden="true">*</span>
             </label>
             <input id="fullname" name="fullname" type="text" required
-                   minlength="2" maxlength="80"
+                   minlength="{{ rules.NAME_MIN }}" maxlength="{{ rules.NAME_MAX }}"
                    value="{{ form.fullname if form else '' }}" autocomplete="name"
                    title="Your name as it should appear on a clinical report.">
           </div>
@@ -94,7 +94,8 @@
               Username <span class="field__req" aria-hidden="true">*</span>
             </label>
             <input id="username" name="username" type="text" required
-                   minlength="3" maxlength="32" pattern="[A-Za-z0-9._-]{3,32}"
+                   minlength="3" maxlength="32"
+                   pattern="{{ rules.USERNAME_PATTERN }}"
                    value="{{ form.username if form else '' }}" autocomplete="username"
                    spellcheck="false"
                    title="3 to 32 characters: letters, digits, dot, underscore or hyphen.">
@@ -106,7 +107,8 @@
             <label class="field__label" for="email">
               Email <span class="field__req" aria-hidden="true">*</span>
             </label>
-            <input id="email" name="email" type="email" required maxlength="120"
+            <input id="email" name="email" type="email" required
+                   maxlength="{{ rules.EMAIL_MAX }}"
                    value="{{ form.email if form else '' }}" autocomplete="email"
                    spellcheck="false"
                    title="A working address, e.g. name@hospital.org">
@@ -115,7 +117,8 @@
             <label class="field__label" for="specialisation">
               Specialisation <span class="subtle">(optional)</span>
             </label>
-            <input id="specialisation" name="specialisation" type="text" maxlength="80"
+            <input id="specialisation" name="specialisation" type="text"
+                   maxlength="{{ rules.SPECIALISATION_MAX }}"
                    value="{{ form.specialisation if form else '' }}"
                    placeholder="Cardiologist">
           </div>
@@ -123,17 +126,27 @@
             <label class="field__label" for="password">
               Password <span class="field__req" aria-hidden="true">*</span>
             </label>
+            {# The pattern is the SAME string services/validation.py matches against,
+               not a copy of it — see the `rules` note in backend/__init__.py. #}
             <input id="password" name="password" type="password" required
-                   minlength="8" maxlength="128" autocomplete="new-password"
-                   title="At least 8 characters.">
-            <div class="field__hint">At least 8 characters.</div>
+                   minlength="{{ rules.PASSWORD_MIN }}"
+                   maxlength="{{ rules.PASSWORD_MAX }}"
+                   pattern="{{ rules.PASSWORD_PATTERN }}"
+                   autocomplete="new-password"
+                   title="At least 8 characters, including at least one letter and one digit.">
+            <div class="field__hint">
+              At least {{ rules.PASSWORD_MIN }} characters, including a letter and a
+              digit. Symbols are allowed and encouraged.
+            </div>
           </div>
           <div class="field">
             <label class="field__label" for="confirm">
               Confirm password <span class="field__req" aria-hidden="true">*</span>
             </label>
             <input id="confirm" name="confirm" type="password" required
-                   minlength="8" maxlength="128" autocomplete="new-password"
+                   minlength="{{ rules.PASSWORD_MIN }}"
+                   maxlength="{{ rules.PASSWORD_MAX }}"
+                   autocomplete="new-password"
                    title="Type the same password again.">
             <div class="field__hint">
               Both entries must match. Checked when you submit.
