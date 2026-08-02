@@ -22,8 +22,7 @@ from backend.config import DB_PATH
 
 from .audit import (clear_system_logs, get_system_logs, get_training_runs,
                     log_activity, log_training_run)
-from .connection import (BASE_DIR, SEED_CREDENTIALS, backup_to, connect,
-                         init_db)
+from .connection import BASE_DIR, SEED_CREDENTIALS, connect, init_db
 from .patients import (delete_patient, get_patient_timeline, get_patients,
                        upsert_patient)
 from .predictions import (add_prediction, clear_all_predictions,
@@ -35,7 +34,7 @@ from .users import (ban_user, delete_user, get_all_users, get_user_by_id,
                     update_user_role, validate_login)
 
 __all__ = [
-    "connect", "init_db", "backup_to", "BASE_DIR", "SEED_CREDENTIALS",
+    "connect", "init_db", "BASE_DIR", "SEED_CREDENTIALS",
     "DB_PATH",
     "hash_password", "verify_password",
     "validate_login", "register_user", "get_all_users", "get_user_by_id",

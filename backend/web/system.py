@@ -1,26 +1,26 @@
 """SuperAdmin: settings, model toggles, retraining, audit logs, backup and restore."""
 from __future__ import annotations
 
+import io
+import json
 import os
-import shutil
 import subprocess
 import sys
 import time
 from datetime import datetime
 
-from flask import (Blueprint, flash, redirect, render_template, request,
-                   send_file, url_for)
+from flask import (Blueprint, current_app, flash, redirect, render_template,
+                   request, send_file, url_for)
 
 from backend import config
 from backend.domain import artifacts
 from backend.ml import registry
 from backend import repositories as db
+from backend.repositories import backup as db_backup
 from backend.services import analytics
 from backend.services import auth as auth_service
 
 bp = Blueprint("system", __name__, url_prefix="/system")
-
-BACKUP_DIR = os.path.join(config.PROJECT_ROOT, "backups")
 
 
 @bp.route("/settings", methods=["GET", "POST"])
@@ -97,6 +97,13 @@ def train():
     subprocess costs a failed training run, not the application.
     """
     actor = auth_service.current_user()
+    if not config.project_dir_writable():
+        # Training writes new pickles into models/. On a read-only host it would run
+        # for however long the estimators take and then fail at the final write, having
+        # burned the time and changed nothing.
+        flash(config.READ_ONLY_NOTICE, "warning")
+        return redirect(url_for("system.models"))
+
     script = os.path.join(config.PROJECT_ROOT, "train_models.py")
     if not os.path.exists(script):
         flash("train_models.py is not present.", "danger")
@@ -152,78 +159,78 @@ def clear_logs():
     return redirect(url_for("system.logs"))
 
 
-def _backups() -> list[dict]:
-    if not os.path.isdir(BACKUP_DIR):
-        return []
-    out = []
-    for name in sorted(os.listdir(BACKUP_DIR), reverse=True):
-        path = os.path.join(BACKUP_DIR, name)
-        if os.path.isfile(path):
-            stat = os.stat(path)
-            out.append({"name": name, "size_kb": stat.st_size / 1024,
-                        "created": datetime.fromtimestamp(stat.st_mtime)
-                                            .strftime("%Y-%m-%d %H:%M:%S")})
-    return out
-
+# ════════════════════════════════════════════════════════════════════════
+# Backup and restore
+# ════════════════════════════════════════════════════════════════════════
+# A backup is a DOWNLOAD and a restore is an UPLOAD. Nothing is written to the server's
+# filesystem, because the server may not have a writable one — the previous version
+# wrote snapshots into `backups/` and served them from there, which on a deployed host
+# is an OSError on the one button whose whole purpose is to protect data.
+#
+# The file is portable between backends, so a populated local SQLite database can be
+# downloaded and restored straight into a deployed Postgres one. That is the migration
+# path off a laptop.
 
 @bp.route("/backup", methods=["GET"])
 @auth_service.roles_required("SuperAdmin")
 def backup():
-    return render_template("pages/backup.html", backups=_backups())
+    return render_template("pages/backup.html", summary=db_backup.summary())
 
 
-@bp.route("/backup/create", methods=["POST"])
+@bp.route("/backup/download")
 @auth_service.roles_required("SuperAdmin")
-def create_backup():
+def download_backup():
     actor = auth_service.current_user()
-    os.makedirs(BACKUP_DIR, exist_ok=True)
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    name = f"heartguard-{stamp}.db"
-    # SQLite's backup API, not a file copy: in WAL mode the newest commits live
-    # in the -wal sidecar and a plain copy of the .db can miss them.
-    db.backup_to(os.path.join(BACKUP_DIR, name))
-    db.log_activity(actor["id"], actor["username"], "Backup Created", name)
-    flash(f"Backup {name} created.", "success")
-    return redirect(url_for("system.backup"))
+    payload = db_backup.export_bytes()
+    name = f"heartguard-{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
+    db.log_activity(actor["id"], actor["username"], "Backup Downloaded",
+                    f"{name} ({len(payload) / 1024:.0f} KB)")
+    # BytesIO, not a temporary file: send_file streams it from memory and there is no
+    # path to clean up afterwards or leave behind on a shared host.
+    return send_file(io.BytesIO(payload), mimetype="application/json",
+                     as_attachment=True, download_name=name)
 
 
-@bp.route("/backup/<name>/download")
+@bp.route("/backup/restore", methods=["POST"])
 @auth_service.roles_required("SuperAdmin")
-def download_backup(name: str):
-    # basename() strips any traversal in the URL segment. Without it, a crafted name
-    # reads arbitrary files off the server.
-    safe = os.path.basename(name)
-    path = os.path.join(BACKUP_DIR, safe)
-    if not os.path.isfile(path):
-        flash("That backup no longer exists.", "warning")
+def restore_backup():
+    actor = auth_service.current_user()
+
+    # The confirmation is checked FIRST, before the upload is even parsed. A restore
+    # replaces every patient record in the database, and the cost of getting here by
+    # accident is the whole dataset.
+    if (request.form.get("confirm") or "").strip() != "RESTORE":
+        flash("Type RESTORE exactly to confirm.", "warning")
         return redirect(url_for("system.backup"))
-    return send_file(path, as_attachment=True, download_name=safe)
 
+    upload = request.files.get("backup")
+    if not upload or not upload.filename:
+        flash("Choose a backup file to restore.", "warning")
+        return redirect(url_for("system.backup"))
 
-@bp.route("/backup/<name>/restore", methods=["POST"])
-@auth_service.roles_required("SuperAdmin")
-def restore_backup(name: str):
-    actor = auth_service.current_user()
-    safe = os.path.basename(name)
-    path = os.path.join(BACKUP_DIR, safe)
-    if not os.path.isfile(path):
-        flash("That backup no longer exists.", "warning")
-    elif (request.form.get("confirm") or "").strip() != safe:
-        flash("Type the backup filename exactly to confirm the restore.", "warning")
-    else:
-        # The CURRENT database is backed up first. Restore overwrites live patient
-        # records; without this step an accidental restore is unrecoverable.
-        os.makedirs(BACKUP_DIR, exist_ok=True)
-        pre = f"pre-restore-{datetime.now().strftime('%Y%m%d-%H%M%S')}.db"
-        db.backup_to(os.path.join(BACKUP_DIR, pre))
-        # Restoring IS a file copy - the incoming file becomes the database. Any
-        # stale -wal/-shm sidecars must go with it, or SQLite replays them over
-        # the restored file and undoes the restore.
-        shutil.copy2(path, config.DB_PATH)
-        for sidecar in (config.DB_PATH + "-wal", config.DB_PATH + "-shm"):
-            if os.path.exists(sidecar):
-                os.remove(sidecar)
-        db.log_activity(actor["id"], actor["username"], "Backup Restored",
-                        f"{safe} (previous state saved as {pre})")
-        flash(f"Restored {safe}. The previous database was saved as {pre}.", "success")
+    try:
+        document = json.loads(upload.read().decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        flash("That file is not readable JSON.", "danger")
+        return redirect(url_for("system.backup"))
+
+    problem = db_backup.validate(document)
+    if problem:
+        flash(problem, "danger")
+        return redirect(url_for("system.backup"))
+
+    try:
+        counts = db_backup.import_document(document)
+    except Exception as exc:                                   # noqa: BLE001
+        # import_document rolls back, so the database is untouched. Report the failure
+        # rather than a generic 500: the operator needs to know their data is intact.
+        current_app.logger.exception("Restore failed")
+        flash(f"Restore failed and nothing was changed ({type(exc).__name__}).",
+              "danger")
+        return redirect(url_for("system.backup"))
+
+    restored = ", ".join(f"{n} {t}" for t, n in counts.items() if n)
+    db.log_activity(actor["id"], actor["username"], "Backup Restored",
+                    f"{upload.filename}: {restored}")
+    flash(f"Restored from {upload.filename} — {restored}.", "success")
     return redirect(url_for("system.backup"))

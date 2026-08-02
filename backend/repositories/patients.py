@@ -7,10 +7,8 @@ clinician can see the same person's history across visits.
 
 from __future__ import annotations
 
-import sqlite3
-
 from .audit import log_activity
-from .connection import connect
+from .connection import OperationalError, connect, insert_returning_id
 
 
 # ─────────────────────────────────────────────
@@ -25,7 +23,6 @@ def upsert_patient(patient_code, fullname, gender, created_by, notes=""):
     PT-00123); it is unique, so re-using it is how a follow-up is recorded.
     """
     conn = connect()
-    conn.row_factory = sqlite3.Row
     c = conn.cursor()
 
     # BUG-24: `created_by` is a foreign key to users(id), and foreign keys are now
@@ -46,10 +43,10 @@ def upsert_patient(patient_code, fullname, gender, created_by, notes=""):
         c.execute("UPDATE patients SET fullname=?, gender=? WHERE id=?",
                   (fullname, gender, pid))
     else:
-        c.execute("""INSERT INTO patients (patient_code,fullname,gender,notes,created_by)
-                     VALUES (?,?,?,?,?)""",
-                  (patient_code, fullname, gender, notes, created_by))
-        pid = c.lastrowid
+        pid = insert_returning_id(
+            c, """INSERT INTO patients (patient_code,fullname,gender,notes,created_by)
+                  VALUES (?,?,?,?,?)""",
+            (patient_code, fullname, gender, notes, created_by))
     conn.commit()
     conn.close()
     return pid
@@ -58,7 +55,6 @@ def upsert_patient(patient_code, fullname, gender, created_by, notes=""):
 def get_patients(created_by=None):
     """Patients with assessment counts and latest risk, for the records page."""
     conn = connect()
-    conn.row_factory = sqlite3.Row
     c = conn.cursor()
     sql = """
         SELECT p.*,
@@ -78,8 +74,14 @@ def get_patients(created_by=None):
     sql += " GROUP BY p.id ORDER BY last_assessed DESC NULLS LAST"
     try:
         c.execute(sql, params)
-    except sqlite3.OperationalError:
-        # Older SQLite builds reject NULLS LAST
+    except OperationalError:
+        # Older SQLite builds reject NULLS LAST. Postgres has supported it since 8.3,
+        # so this branch is SQLite's in practice — but the rollback is here because on
+        # Postgres a failed statement poisons the transaction, and retrying on the same
+        # connection without it fails for a reason that has nothing to do with the
+        # retry.
+        conn.rollback()
+        c = conn.cursor()
         c.execute(sql.replace(" NULLS LAST", ""), params)
     rows = [dict(r) for r in c.fetchall()]
     conn.close()
@@ -89,7 +91,6 @@ def get_patients(created_by=None):
 def get_patient_timeline(patient_ref):
     """Every assessment for one patient, oldest first — the risk trajectory."""
     conn = connect()
-    conn.row_factory = sqlite3.Row
     c = conn.cursor()
     c.execute("""SELECT p.*, u.fullname AS doctor_name
                  FROM predictions p LEFT JOIN users u ON p.user_id = u.id

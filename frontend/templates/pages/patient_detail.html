@@ -21,10 +21,13 @@
               <form method="post" action="{{ url_for('patients.record_outcome', pred_id=r.id) }}"
                     class="row">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                {# The stored value is an integer; the form vocabulary is a word. The
+                   mapping lives in shared/formatting.py — see the note there for why
+                   these two were once the same thing and should never be again. #}
                 <select name="outcome" style="max-width:150px">
-                  <option value="unknown" {% if not r.outcome or r.outcome == "unknown" %}selected{% endif %}>Unknown</option>
-                  <option value="confirmed" {% if r.outcome == "confirmed" %}selected{% endif %}>Confirmed</option>
-                  <option value="ruled_out" {% if r.outcome == "ruled_out" %}selected{% endif %}>Ruled out</option>
+                  <option value="unknown" {% if r.outcome is none %}selected{% endif %}>Unknown</option>
+                  <option value="confirmed" {% if r.outcome == 1 %}selected{% endif %}>Confirmed</option>
+                  <option value="ruled_out" {% if r.outcome == 0 %}selected{% endif %}>Ruled out</option>
                 </select>
                 <button class="btn btn--secondary btn--sm" type="submit">Save</button>
               </form>

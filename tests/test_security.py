@@ -101,7 +101,10 @@ WRITE_PATHS = [
     ("/system/settings", {"allow_registration": "on"}, "SuperAdmin"),
     ("/system/models", {"model_0": "on"}, "SuperAdmin"),
     ("/system/logs/clear", {"confirm": "CLEAR LOGS"}, "SuperAdmin"),
-    ("/system/backup/create", {}, "SuperAdmin"),
+    # No confirmation is sent, so even the permitted role changes nothing here. What
+    # is under test is the ROLE guard: this route replaces every record in the
+    # database, and a Doctor or an Admin must not reach it at all.
+    ("/system/backup/restore", {}, "SuperAdmin"),
     ("/admin/roles", {"user_id": "1", "role": "Doctor"}, "SuperAdmin"),
     ("/admin/predictions/clear", {"confirm": "nope"}, "SuperAdmin"),
 ]
@@ -297,24 +300,27 @@ if admin:
     with app.test_client() as c:
         sign_in(c, *admin)
         # Authenticated, but no token — exactly what a forged cross-site form sends.
-        r = c.post("/system/backup/create", data={}, follow_redirects=False)
+        # /system/backup/restore is the most destructive POST in the application: it
+        # replaces every record in the database, which makes it the right one to prove
+        # the CSRF check on.
+        r = c.post("/system/backup/restore", data={}, follow_redirects=False)
         check("a POST with no CSRF token is rejected", r.status_code == 400,
               f"got {r.status_code}")
-        r = c.post("/system/backup/create", data={"csrf_token": "not-the-token"},
+        r = c.post("/system/backup/restore", data={"csrf_token": "not-the-token"},
                    follow_redirects=False)
         check("a POST with a WRONG CSRF token is rejected", r.status_code == 400,
               f"got {r.status_code}")
-        # And the legitimate path still works. This one really does create a backup,
-        # so it is removed again — the earlier version left one file behind on every
-        # run, which is how five stray snapshots accumulated in backups/.
-        from backend.web import system as _system_web
-        _before = set(os.listdir(_system_web.BACKUP_DIR)) \
-            if os.path.isdir(_system_web.BACKUP_DIR) else set()
-        r = post(c, "/system/backup/create", follow_redirects=False)
-        check("a POST with the correct token still succeeds",
+        # The legitimate path reaches the view — and is then refused by the view's own
+        # confirmation check, so this leaves the database untouched. Both guards are
+        # exercised, neither destroys anything.
+        _users_before = len(db.get_all_users())
+        r = post(c, "/system/backup/restore", {"confirm": "not-the-word"},
+                 follow_redirects=False)
+        check("a POST with the correct token reaches the view",
               r.status_code in (301, 302), f"got {r.status_code}")
-        for _name in (set(os.listdir(_system_web.BACKUP_DIR)) - _before):
-            os.remove(os.path.join(_system_web.BACKUP_DIR, _name))
+        check("and the wrong confirmation still changed nothing",
+              len(db.get_all_users()) == _users_before,
+              "a restore ran without its confirmation")
 
     with app.test_client() as c:
         # GET must never be blocked by the check — safe methods do not change state.

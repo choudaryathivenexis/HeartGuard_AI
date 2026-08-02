@@ -32,13 +32,20 @@ def create_app(test_config: dict | None = None) -> Flask:
         static_url_path="/static",
     )
     app.config.from_object(config.Config)
+
+    # The schema is created on first run if the database does not exist yet.
+    #
+    # BEFORE the secret key is read, not after. Settings — including the generated
+    # session key — now live in the database rather than in a file beside the code, so
+    # reading one before the schema exists is a "no such table" error at start-up. The
+    # two lines are in the order their dependency requires; swapping them back breaks
+    # the first run of every fresh deployment and nothing else.
+    from backend import repositories as db
+    db.init_db()
+
     app.config["SECRET_KEY"] = config.secret_key()
     if test_config:
         app.config.update(test_config)
-
-    # The schema is created on first run if the database file does not exist yet.
-    from backend import repositories as db
-    db.init_db()
 
     _ensure_static_assets()
 

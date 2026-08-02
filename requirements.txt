@@ -17,6 +17,18 @@ flask>=3.0
 # gunicorn because gunicorn does not run on Windows.
 waitress>=3.0
 
+# --- Database ---
+# SQLite needs nothing: it is in the standard library, and it is what the application
+# uses when DATABASE_URL is unset — which is every local run.
+#
+# Postgres is what it uses when DATABASE_URL IS set, which is every deployment to a
+# host with a read-only filesystem. [binary] ships the libpq wheel so no PostgreSQL
+# client library has to be present on the machine. psycopg_pool keeps a handful of
+# connections open; without it every repository call pays a fresh TCP and TLS
+# handshake, and one page makes several.
+psycopg[binary]>=3.2
+psycopg_pool>=3.2
+
 # --- Data handling ---
 pandas>=2.0
 numpy>=1.24

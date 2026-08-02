@@ -72,27 +72,36 @@ def load_benchmarks() -> dict:
     return _read_json(config.BENCHMARKS_JSON)
 
 
+_MODEL_CONFIG_KEY = "model_config"
+
+
 def load_model_config() -> dict:
     """
     Which estimators are enabled, as toggled by an administrator.
 
-    Defaults every known model to on. Written back on first read so the file exists
-    and the toggles page has something concrete to edit.
+    Defaults every known model to on. Written back on first read so the toggles page
+    has something concrete to edit.
+
+    STORED IN THE DATABASE, not in models/config.json as it once was. This is an
+    operator decision, not a build artifact: `models/` is read-only on a deployed host,
+    so saving a toggle raised OSError there, and two instances reading their own copy
+    of the file would disagree about which models are scoring patients.
+
+    A config.json left over from an older installation is imported once, so an
+    administrator's existing choice is not quietly reset to "everything on".
     """
-    path = os.path.join(config.MODELS_DIR, "config.json")
-    existing = _read_json(path)
-    if existing:
-        return existing
-    defaults = {name: True for name in config.MODEL_FILES}
-    save_model_config(defaults)
-    return defaults
+    stored = config.get_setting(_MODEL_CONFIG_KEY)
+    if stored:
+        return stored
+
+    legacy = _read_json(os.path.join(config.MODELS_DIR, "config.json"))
+    chosen = legacy or {name: True for name in config.MODEL_FILES}
+    save_model_config(chosen)
+    return chosen
 
 
 def save_model_config(cfg: dict) -> None:
-    os.makedirs(config.MODELS_DIR, exist_ok=True)
-    with open(os.path.join(config.MODELS_DIR, "config.json"), "w",
-              encoding="utf-8") as fh:
-        json.dump(cfg, fh, indent=2)
+    config.set_setting(_MODEL_CONFIG_KEY, cfg)
 
 
 def clear_caches() -> None:

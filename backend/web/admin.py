@@ -160,7 +160,12 @@ def dataset():
     actor = auth_service.current_user()
     if request.method == "POST":
         upload = request.files.get("dataset")
-        if not upload or not upload.filename:
+        if not config.project_dir_writable():
+            # Checked before the file is touched. Saving would raise OSError, which
+            # renders as a 500 and reads as a broken application rather than a host
+            # that does not allow this.
+            flash(config.READ_ONLY_NOTICE, "warning")
+        elif not upload or not upload.filename:
             flash("Choose a CSV file to upload.", "warning")
         elif not secure_filename(upload.filename).lower().endswith(".csv"):
             flash("The training dataset must be a .csv file.", "warning")
@@ -184,4 +189,6 @@ def dataset():
             info["columns"] = header.split(";") if ";" in header else header.split(",")
             info["rows"] = sum(1 for _ in fh)
     return render_template("pages/dataset.html", info=info,
-                           has_backup=os.path.exists(config.DATASET_CSV + ".previous"))
+                           has_backup=os.path.exists(config.DATASET_CSV + ".previous"),
+                           read_only=not config.project_dir_writable(),
+                           read_only_notice=config.READ_ONLY_NOTICE)

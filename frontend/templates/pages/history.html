@@ -31,7 +31,7 @@
               <td>{{ m.band_chip(r.risk_band) }}</td>
               <td class="num">{{ fmt.pct(r.probability) }}</td>
               <td>{{ r.model_used }}</td>
-              <td>{{ r.outcome or "-" }}</td>
+              <td>{{ fmt.outcome(r.outcome) }}</td>
               <td class="num">
                 <div class="row row--end">
                   <a class="btn btn--secondary btn--sm"

@@ -56,6 +56,47 @@ MODEL_FILES = {
 ENSEMBLE_NAME = "Ensemble Voting"
 
 
+def project_dir_writable() -> bool:
+    """
+    Can the application write beside its own code?
+
+    Two features need to: replacing the training dataset (which overwrites heart.csv)
+    and retraining (which writes new pickles into models/). A serverless host mounts
+    the deployment read-only, so both raise OSError there — and an unhandled OSError
+    renders as "Something went wrong", which tells an administrator nothing about why
+    a button does not work and invites them to keep pressing it.
+
+    Probed by writing rather than by `os.access`, which reports the permission bits and
+    not the mount: on a read-only filesystem the bits still say writable, and Windows
+    ignores the call almost entirely. The probe file is removed immediately.
+
+    Cached: the answer cannot change while the process runs, and the pages that ask are
+    on the request path.
+    """
+    global _WRITABLE
+    if _WRITABLE is None:
+        probe = os.path.join(PROJECT_ROOT, ".writeprobe")
+        try:
+            with open(probe, "w", encoding="utf-8") as fh:
+                fh.write("")
+            os.remove(probe)
+            _WRITABLE = True
+        except OSError:
+            _WRITABLE = False
+    return _WRITABLE
+
+
+_WRITABLE: bool | None = None
+
+# Shown wherever a feature is unavailable for this reason, so the wording is identical
+# on every page rather than reinvented at each call site.
+READ_ONLY_NOTICE = (
+    "This deployment's filesystem is read-only, so the training dataset and the model "
+    "files cannot be changed from here. Run the application locally, or in a container "
+    "with a writable volume, to use this feature."
+)
+
+
 class Config:
     """Flask configuration. Values here are read by the app factory."""
 
@@ -71,39 +112,42 @@ class Config:
     JSON_SORT_KEYS = False
 
 
-def _load_settings() -> dict:
-    import json
-    try:
-        with open(SETTINGS_PATH, encoding="utf-8") as fh:
-            return json.load(fh)
-    except Exception:
-        return {}
-
-
-def _save_settings(data: dict) -> None:
-    import json
-    with open(SETTINGS_PATH, "w", encoding="utf-8") as fh:
-        json.dump(data, fh, indent=2)
+# ── settings ────────────────────────────────────────────────────────────
+# These delegate to the database. The import is INSIDE each function on purpose:
+# `backend.repositories.connection` imports this module for DB_PATH, so importing it
+# back at module level is a cycle that makes the whole package unimportable. A local
+# import runs after both modules are loaded, and costs a dictionary lookup.
+#
+# The storage moved out of system_settings.json because a file beside the code cannot
+# be written on a read-only host and is not shared between instances — see
+# backend/repositories/settings.py for the full reasoning.
 
 
 def get_setting(key: str, default=None):
-    return _load_settings().get(key, default)
+    from backend.repositories import settings as store
+    return store.get_setting(key, default)
 
 
 def set_setting(key: str, value) -> None:
-    data = _load_settings()
-    data[key] = value
-    _save_settings(data)
+    from backend.repositories import settings as store
+    store.set_setting(key, value)
 
 
 def secret_key() -> str:
     """
     A persistent session key, created on first run.
 
-    Stored beside the other system settings so it survives restarts. Without
-    persistence Flask signs cookies with a key that changes every reload, and every
-    user is silently signed out whenever the server restarts — which during
-    development is constantly.
+    Stored with the other system settings so it survives restarts. Without persistence
+    Flask signs cookies with a key that changes every reload, and every user is
+    silently signed out whenever the server restarts — which during development is
+    constantly, and across a fleet of instances is permanently.
+
+    HEARTGUARD_SECRET_KEY wins and is checked FIRST, before anything touches the
+    database. That ordering is what lets a deployment set the key as an environment
+    variable and start up even if the schema has not been created yet.
+
+    REQUIRES THE SCHEMA TO EXIST when falling through to the database, so `create_app`
+    calls `init_db()` before this.
     """
     if Config.SECRET_KEY:
         return Config.SECRET_KEY

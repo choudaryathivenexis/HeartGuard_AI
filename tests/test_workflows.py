@@ -143,41 +143,88 @@ if superadmin:
 
 
 # ════════════════════════════════════════════════════════════════════════
-print("\n=== 3. backup create / download / restore ===")
+print("\n=== 3. backup download / restore round-trip ===")
 if superadmin:
-    from backend.web import system as system_web
+    import io
+    import json as _json
+
     with app.test_client() as c:
         sign_in(c, *superadmin)
-        before = os.listdir(system_web.BACKUP_DIR) if \
-            os.path.isdir(system_web.BACKUP_DIR) else []
-        post(c, "/system/backup/create", follow_redirects=True)
-        after = os.listdir(system_web.BACKUP_DIR)
-        created = [f for f in after if f not in before]
-        check("a backup file is created", len(created) == 1, str(created))
 
-        if created:
-            name = created[0]
-            r = c.get(f"/system/backup/{name}/download")
-            check("the backup downloads", r.status_code == 200, str(r.status_code))
-            check("it is a SQLite database", r.data[:15] == b"SQLite format 3",
-                  str(r.data[:15]))
-            # CLOSE IT. `send_file` streams from an open handle, and the test client
-            # does not close the response for you — on Windows the file then cannot be
-            # deleted. This is a test-harness detail, not a product bug: a real request
-            # is closed by the server once the body has been sent, which was confirmed
-            # by deleting the file successfully straight after `r.close()`.
-            r.close()
+        r = c.get("/system/backup/download")
+        check("the backup downloads", r.status_code == 200, str(r.status_code))
+        check("it is offered as an attachment",
+              "attachment" in (r.headers.get("Content-Disposition") or ""),
+              str(r.headers.get("Content-Disposition")))
+        payload = r.data
+        r.close()
 
-            # A wrong confirmation must not overwrite the live database.
-            users_before = len(db.get_all_users())
-            post(c, f"/system/backup/{name}/restore", {"confirm": "wrong"},
-                 follow_redirects=True)
-            check("restore refuses a wrong confirmation",
-                  len(db.get_all_users()) == users_before,
-                  "the live database was overwritten without confirmation")
+        document = _json.loads(payload.decode("utf-8"))
+        check("it declares the HeartGuard backup format",
+              document.get("format") == "heartguard-backup", str(document.get("format")))
+        check("it carries every table",
+              set(document.get("tables", {})) ==
+              {"users", "patients", "predictions", "system_logs", "training_runs",
+               "app_settings"},
+              str(sorted(document.get("tables", {}))))
+        check("the user table is populated",
+              len(document["tables"]["users"]) == len(db.get_all_users()),
+              f"{len(document['tables']['users'])} vs {len(db.get_all_users())}")
 
-            os.remove(os.path.join(system_web.BACKUP_DIR, name))
-            print(f"  [cleanup] removed {name}")
+        # The session signing key must not travel in a backup: a file that contains it
+        # lets whoever holds it forge a session for any account, and backup files get
+        # emailed and copied around.
+        setting_keys = {row["key"] for row in document["tables"]["app_settings"]}
+        check("the session signing key is redacted", "secret_key" not in setting_keys,
+              "the backup file contains the session key")
+
+        users_before = len(db.get_all_users())
+        predictions_before = len(db.get_predictions())
+
+        # A wrong confirmation must not touch the database.
+        post(c, "/system/backup/restore",
+             {"confirm": "wrong",
+              "backup": (io.BytesIO(payload), "backup.json")},
+             content_type="multipart/form-data", follow_redirects=True)
+        check("restore refuses a wrong confirmation",
+              len(db.get_all_users()) == users_before,
+              "the live database was replaced without confirmation")
+
+        # Neither must a file that is not a backup — even with the right confirmation.
+        post(c, "/system/backup/restore",
+             {"confirm": "RESTORE",
+              "backup": (io.BytesIO(b'{"format": "something-else"}'), "evil.json")},
+             content_type="multipart/form-data", follow_redirects=True)
+        check("restore refuses a foreign document",
+              len(db.get_all_users()) == users_before,
+              "an unrecognised file was restored over the database")
+
+        # The real thing: restoring the document just downloaded must be an identity
+        # operation. If the delete/insert order, the column list or the id handling is
+        # wrong, this is where the row counts stop matching.
+        rr = post(c, "/system/backup/restore",
+                  {"confirm": "RESTORE",
+                   "backup": (io.BytesIO(payload), "backup.json")},
+                  content_type="multipart/form-data", follow_redirects=True)
+        check("the restore is accepted", rr.status_code == 200, str(rr.status_code))
+        check("every account survived the round-trip",
+              len(db.get_all_users()) == users_before,
+              f"{len(db.get_all_users())} accounts, was {users_before}")
+        check("every assessment survived the round-trip",
+              len(db.get_predictions()) == predictions_before,
+              f"{len(db.get_predictions())} assessments, was {predictions_before}")
+
+        # And the database must still accept new rows afterwards. On Postgres the
+        # identity sequences are left pointing at 1 by a restore that inserts explicit
+        # ids, so the next INSERT collides with a restored row — a restore that looks
+        # successful and breaks the first thing anyone does next.
+        new_id, err = db.register_user("_backup_probe", "probe-pw-1234", "Doctor",
+                                       "Backup Probe", "probe@heartguard.local", "")
+        check("a new row can still be inserted after a restore",
+              new_id is not None, f"insert failed after restore: {err}")
+        if new_id is not None:
+            db.delete_user(new_id, "workflow-test")
+            print("  [cleanup] removed _backup_probe")
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -202,6 +249,24 @@ if admin:
 # ════════════════════════════════════════════════════════════════════════
 print("\n=== 5. recording a clinical outcome ===")
 rows = db.get_predictions()
+
+# On a database that has never been used there is nothing to record an outcome
+# AGAINST, and this section used to skip silently — which meant the outcome path was
+# never exercised on a fresh installation, i.e. on exactly the deployment most likely
+# to be broken. Make the row it needs, and remove it afterwards.
+_seeded_prediction = None
+if not rows and admin:
+    _actor = next((u for u in db.get_all_users() if u["role"] == "Doctor"), None) \
+        or next(iter(db.get_all_users()), None)
+    if _actor:
+        _seeded_prediction = db.add_prediction(
+            _actor["id"], 61, 2, 168, 88, 148, 92, 2, 1, 0, 0, 1,
+            1, 0.63, "Ensemble Voting", patient_name="Workflow Seed",
+            notes="created by test_workflows to exercise the outcome path",
+            risk_band="High", threshold_used=0.44, model_version="test")
+        rows = db.get_predictions()
+        print(f"  [setup] created prediction {_seeded_prediction}")
+
 if rows and admin:
     row = rows[0]
     original_outcome = row.get("outcome")
@@ -211,17 +276,30 @@ if rows and admin:
              {"outcome": "confirmed", "outcome_notes": "workflow test"},
              follow_redirects=True)
         updated = next(r for r in db.get_predictions() if r["id"] == row["id"])
-        check("the outcome is recorded", updated.get("outcome") == "confirmed",
-              str(updated.get("outcome")))
+        # 1, not "confirmed". The column is INTEGER and every calculation compares
+        # against 1; storing the form's own word is what made the deployed-performance
+        # statistics silently empty. See shared/formatting.py.
+        check("the outcome is recorded as the stored integer",
+              updated.get("outcome") == 1, repr(updated.get("outcome")))
+
+        # And it must now actually COUNT. This is the assertion whose absence let the
+        # bug live: the write succeeded, so a test of the write alone passed.
+        stats, _rows = db.get_outcome_stats()
+        check("the recorded outcome reaches the statistics",
+              stats.get("with_outcome", 0) >= 1, str(stats.get("with_outcome")))
 
         post(c, f"/patients/outcome/{row['id']}", {"outcome": "not-a-valid-value"},
              follow_redirects=True)
         updated = next(r for r in db.get_predictions() if r["id"] == row["id"])
         check("an invalid outcome value is refused",
-              updated.get("outcome") == "confirmed", str(updated.get("outcome")))
+              updated.get("outcome") == 1, repr(updated.get("outcome")))
 
-        db.record_outcome(row["id"], original_outcome or "unknown", "", "workflow-test")
+        db.record_outcome(row["id"], original_outcome, "", "workflow-test")
         print("  [restored] outcome")
+
+if _seeded_prediction is not None:
+    db.delete_prediction(_seeded_prediction, "workflow-test")
+    print(f"  [cleanup] removed prediction {_seeded_prediction}")
 
 
 # ════════════════════════════════════════════════════════════════════════

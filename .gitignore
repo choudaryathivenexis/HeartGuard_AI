@@ -24,3 +24,11 @@ heart.csv.previous
 # SQLite WAL sidecars. Transient, and meaningless without the database they belong to.
 *.db-wal
 *.db-shm
+
+# Left behind only if the process dies between writing and removing it — see
+# config.project_dir_writable(), which uses it to find out whether this host allows
+# the dataset and the model files to be replaced.
+.writeprobe
+
+# Vercel CLI working directory.
+.vercel/

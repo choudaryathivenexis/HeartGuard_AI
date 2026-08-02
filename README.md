@@ -64,16 +64,67 @@ requests.
 
 ---
 
+## Which database
+
+The application speaks two, chosen by one environment variable:
+
+```bash
+# unset  -> SQLite, in heartguard.db beside the code. Every local run.
+DATABASE_URL=postgresql://user:password@host/dbname   # -> Postgres
+```
+
+SQLite is right for a machine you can point at a file. It is wrong for a serverless
+host, where the filesystem is read-only and each instance would hold a private copy of
+the data anyway. The whole difference is confined to
+[backend/repositories/dialect.py](backend/repositories/dialect.py) — placeholders,
+timestamps, new-row ids and the row type — so every query above that layer is written
+once.
+
+Two things follow that are easy to miss:
+
+- **Timestamps are TEXT on both backends.** Postgres would otherwise return `datetime`
+  objects, and the analytics service slices the value as a string to group by day. That
+  is a `TypeError`, not a formatting difference.
+- **A backup is portable between them.** Download from a populated SQLite install and
+  restore into a deployed Postgres one — that is the migration path off a laptop.
+
+---
+
 ## Deploying
 
-Three configurations ship with the project. None of them require a card; all three trade
-something else away instead, and the table says what.
+Four configurations ship with the project. None require a card; each trades something
+else away, and the table says what.
 
 | | card | always on | notes |
 |---|---|---|---|
+| **Vercel** (`vercel.json`) | no | **yes** | needs a Postgres URL; no dataset upload or retraining |
 | GitHub Codespaces (`.devcontainer/`) | no | **no** | stops after 30 min idle; 60 core-hours/month |
 | Hugging Face Spaces (`Dockerfile`) | no | yes | **needs free CPU quota, which not every account has** |
 | Render (`render.yaml`) | **yes** | sleeps at 15 min | free plan asks for a card it does not charge |
+
+### Vercel — the always-on option
+
+[api/index.py](api/index.py) is the entry point and [vercel.json](vercel.json) routes
+every path to it. Import the repository at <https://vercel.com/new>, then set two
+environment variables in the project settings:
+
+| variable | value |
+|---|---|
+| `DATABASE_URL` | a Postgres connection string — [Neon](https://neon.tech) has a free tier that needs no card |
+| `HEARTGUARD_SECRET_KEY` | any long random string; `python -c "import secrets;print(secrets.token_hex(32))"` |
+
+**`DATABASE_URL` is not optional here.** Without it the application falls back to SQLite
+inside a read-only bundle, and the first write is the audit entry that sign-in makes —
+so nobody could log in at all.
+
+**Two administrative features cannot work on this host**, and the pages say so rather
+than failing: replacing the training dataset, and retraining. Both write beside the
+code, and the deployment is read-only. Everything else — screening, SHAP explanations,
+PDF and CSV export, patients, reports, charts, user administration, settings, model
+toggles, activity logs, and backup and restore — works exactly as it does locally.
+
+Expect a slow first request after an idle period: a cold start imports scikit-learn,
+xgboost, shap and matplotlib and unpickles five estimators.
 
 ### GitHub Codespaces — best for a demo or viva
 
@@ -123,20 +174,24 @@ cleanly and then dies on first import.
 repository, Apply. Runtime, commands, health check and environment variables all come
 from that file.
 
-### On the hosted platforms, there is no persistent disk
+### Where the data actually lives
 
 **This matters before you show it to anyone:**
 
-| | behaviour |
+| deployment | what happens to the data |
 |---|---|
-| First boot | schema created, three seed accounts printed to the Render log |
-| While running | assessments save and behave normally |
-| After a redeploy or restart | **the database is recreated empty** |
-| After 15 minutes idle | instance sleeps; next request takes 30–60s to unpickle the models |
+| Vercel + Postgres | it persists — the database is a separate managed service |
+| Codespaces | it persists — `/workspaces` survives an idle stop; gone when the Codespace is deleted, automatic after 30 days unused |
+| Hugging Face / Render, no `DATABASE_URL` | **recreated empty on every redeploy or restart** |
 
-Codespaces is the exception: `/workspaces` is a real disk that survives an idle stop, so
-`heartguard.db` is still there when it restarts. It goes away when the Codespace itself
-is deleted — automatic after 30 days unused.
+The last row is the trap. A container with SQLite inside it holds the database on the
+container's own disk, and that disk is replaced with the container. Set `DATABASE_URL`
+on those hosts too and the same free Postgres fixes it.
+
+`HEARTGUARD_SECRET_KEY` should be set on any deployment. Without it the application
+generates a key and stores it with the other settings — which is correct and survives a
+restart, but two instances started against an empty database would each generate their
+own, and each would then reject the other's session cookies.
 
 That is the right trade for a demonstration URL and the wrong one for real records. To
 make data persist, the database has to move off the container — free managed Postgres

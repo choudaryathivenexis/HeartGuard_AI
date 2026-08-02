@@ -5,6 +5,7 @@ from flask import Blueprint, flash, redirect, render_template, request, url_for
 
 from backend import repositories as db
 from backend.services import auth as auth_service
+from shared import formatting as fmt
 
 bp = Blueprint("patients", __name__, url_prefix="/patients")
 
@@ -57,11 +58,15 @@ def delete(patient_ref: str):
 def record_outcome(pred_id: int):
     """Record the confirmed clinical outcome — this is what makes calibration measurable."""
     user = auth_service.current_user()
-    outcome = request.form.get("outcome")
-    if outcome not in {"confirmed", "ruled_out", "unknown"}:
+    submitted = request.form.get("outcome")
+    if submitted not in fmt.OUTCOME_TO_DB:
         flash("Select a valid outcome.", "warning")
     else:
-        db.record_outcome(pred_id, outcome,
+        # TRANSLATED, not passed through. The form speaks "confirmed"; the column is
+        # INTEGER and every consumer compares against 1. Sending the raw form value
+        # stored a string that SQLite accepted and every calculation then ignored —
+        # see the vocabulary note in shared/formatting.py.
+        db.record_outcome(pred_id, fmt.OUTCOME_TO_DB[submitted],
                           (request.form.get("outcome_notes") or "").strip(),
                           user["username"])
         flash("Outcome recorded.", "success")

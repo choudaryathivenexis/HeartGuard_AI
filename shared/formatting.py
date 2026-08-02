@@ -32,6 +32,45 @@ EN_DASH = "–"
 
 
 # ════════════════════════════════════════════════════════════════════════
+# Clinical outcome vocabulary
+# ════════════════════════════════════════════════════════════════════════
+# THE ONE PLACE the three representations of an outcome are related:
+#
+#     form value      what the <select> submits          "confirmed"
+#     stored value    what the INTEGER column holds       1
+#     label           what a reader sees                  "Confirmed"
+#
+# They were previously related nowhere. The form value went straight into the database,
+# so an INTEGER column held the string "confirmed" — accepted by SQLite, which stores
+# whatever it cannot losslessly convert, and rejected outright by Postgres.
+#
+# The consequence on SQLite was not a visible error. `get_outcome_stats` compares
+# `outcome == 1`, which is False for every string, and then sums the column — raising
+# TypeError, which `services/analytics.outcome_summary` catches and turns into an empty
+# result. So every recorded outcome was collected, stored, and silently excluded from
+# the deployed-performance monitoring it exists to feed. The page rendered, the numbers
+# were simply never there.
+#
+# `unknown` maps to None rather than to a third integer: "no outcome recorded" is the
+# absence of a value, and `WHERE outcome IS NOT NULL` is what selects the rows that
+# have one.
+OUTCOME_TO_DB = {"confirmed": 1, "ruled_out": 0, "unknown": None}
+OUTCOME_LABELS = {1: "Confirmed", 0: "Ruled out", None: "Unknown"}
+
+
+def outcome(value) -> str:
+    """The reader-facing label for a stored outcome."""
+    if value is None or value == "":
+        return OUTCOME_LABELS[None]
+    try:
+        return OUTCOME_LABELS[int(value)]
+    except (TypeError, ValueError, KeyError):
+        # A value written before the vocabulary was pinned down. Shown as-is rather
+        # than hidden, so bad data is visible instead of silently becoming "Unknown".
+        return str(value)
+
+
+# ════════════════════════════════════════════════════════════════════════
 # Escaping — the security primitive
 # ════════════════════════════════════════════════════════════════════════
 def esc(value) -> str:

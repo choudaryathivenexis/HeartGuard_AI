@@ -8,8 +8,6 @@ unimportable.
 
 from __future__ import annotations
 
-import sqlite3
-
 from .connection import connect
 
 
@@ -32,7 +30,6 @@ def log_activity(user_id, username, action, details):
 # ─────────────────────────────────────────────
 def get_system_logs(limit=200):
     conn = connect()
-    conn.row_factory = sqlite3.Row
     c = conn.cursor()
     c.execute("SELECT * FROM system_logs ORDER BY timestamp DESC LIMIT ?", (limit,))
     rows = [dict(r) for r in c.fetchall()]
@@ -65,7 +62,6 @@ def log_training_run(triggered_by, status, duration_s, results_json):
 
 def get_training_runs():
     conn = connect()
-    conn.row_factory = sqlite3.Row
     c = conn.cursor()
     c.execute("SELECT * FROM training_runs ORDER BY timestamp DESC LIMIT 20")
     rows = [dict(r) for r in c.fetchall()]

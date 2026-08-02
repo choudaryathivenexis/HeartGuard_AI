@@ -2,50 +2,63 @@
 {% import "partials/macros.html" as m with context %}
 {% block title %}Backup and restore{% endblock %}
 {% block content %}
-  {{ m.pagehead("Backup & restore", "Snapshots of the patient database.") }}
+  {{ m.pagehead("Backup & restore", "Download the database, or replace it from a file.") }}
 
   <div class="panel">
-    <div class="eyebrow">Create a snapshot</div>
-    <form method="post" action="{{ url_for('system.create_backup') }}">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <button class="btn btn--primary" type="submit">Create backup now</button>
-    </form>
-  </div>
-
-  {% if backups %}
-    <div class="tablewrap">
-      <table class="data">
-        <thead><tr><th>File</th><th>Created</th><th class="num">Size</th><th></th></tr></thead>
-        <tbody>
-          {% for b in backups %}
-            <tr>
-              <td class="mono">{{ b.name }}</td>
-              <td class="mono">{{ b.created }}</td>
-              <td class="num mono">{{ "%.0f KB"|format(b.size_kb) }}</td>
-              <td class="num">
-                <div class="row row--end">
-                  <a class="btn btn--secondary btn--sm"
-                     href="{{ url_for('system.download_backup', name=b.name) }}">Download</a>
-                  <form method="post"
-                        action="{{ url_for('system.restore_backup', name=b.name) }}"
-                        class="row">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <input type="text" name="confirm" placeholder="type filename"
-                           style="max-width:190px" autocomplete="off" required>
-                    <button class="btn btn--danger btn--sm" type="submit">Restore</button>
-                  </form>
-                </div>
-              </td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+    <div class="eyebrow">Download a backup</div>
+    <p class="subtle">
+      One JSON file holding every table. It is portable between installations, so a
+      backup taken here can be restored into a deployment running a different database.
+    </p>
+    {% if summary %}
+      <div class="tablewrap">
+        <table class="data">
+          <thead><tr><th>Table</th><th class="num">Rows</th></tr></thead>
+          <tbody>
+            {% for row in summary %}
+              <tr>
+                <td class="mono">{{ row.table }}</td>
+                <td class="num mono">{{ row.rows }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endif %}
+    <div class="row">
+      <a class="btn btn--primary" href="{{ url_for('system.download_backup') }}">
+        Download backup
+      </a>
     </div>
     <p class="subtle">
-      Restoring overwrites live patient records. The database as it stands is saved
-      first, so a mistaken restore can still be undone.
+      The file contains password hashes and patient records. Store it as you would the
+      database itself. The session signing key is deliberately left out, so a backup
+      cannot be used to forge a sign-in.
     </p>
-  {% else %}
-    {{ m.empty("No backups yet.") }}
-  {% endif %}
+  </div>
+
+  <div class="panel">
+    <div class="eyebrow">Restore from a backup</div>
+    <p class="subtle">
+      <strong>This replaces every record in the database</strong> — accounts, patients,
+      assessments and audit history — with the contents of the file. Download a backup
+      first if the current data matters. Either the whole restore succeeds or nothing
+      changes.
+    </p>
+    <form method="post" action="{{ url_for('system.restore_backup') }}"
+          enctype="multipart/form-data">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="field">
+        <label class="field__label" for="backup">Backup file</label>
+        <input id="backup" name="backup" type="file" accept=".json,application/json"
+               required>
+      </div>
+      <div class="field">
+        <label class="field__label" for="confirm">Type RESTORE to confirm</label>
+        <input id="confirm" name="confirm" type="text" autocomplete="off"
+               placeholder="RESTORE" style="max-width:220px" required>
+      </div>
+      <button class="btn btn--danger" type="submit">Restore from file</button>
+    </form>
+  </div>
 {% endblock %}

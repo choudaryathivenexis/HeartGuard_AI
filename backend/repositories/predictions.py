@@ -9,10 +9,8 @@ explained or audited afterwards.
 
 from __future__ import annotations
 
-import sqlite3
-
 from .audit import log_activity
-from .connection import connect
+from .connection import connect, insert_returning_id
 
 
 # ─────────────────────────────────────────────
@@ -35,7 +33,7 @@ def add_prediction(user_id, age, gender, height, weight, ap_hi, ap_lo,
     """
     conn = connect()
     c = conn.cursor()
-    c.execute("""
+    pid = insert_returning_id(c, """
         INSERT INTO predictions
         (user_id,age,gender,height,weight,ap_hi,ap_lo,cholesterol,gluc,
         smoke,alco,active,predicted_class,probability,model_used,patient_name,notes,
@@ -48,7 +46,6 @@ def add_prediction(user_id, age, gender, height, weight, ap_hi, ap_lo,
           patient_ref, model_version, model_manifest_sha, threshold_used, risk_band,
           int(extrapolated), applicability_notes))
     conn.commit()
-    pid = c.lastrowid
     c.execute("SELECT username FROM users WHERE id=?", (user_id,))
     row = c.fetchone()
     uname = row[0] if row else "unknown"
@@ -60,7 +57,6 @@ def add_prediction(user_id, age, gender, height, weight, ap_hi, ap_lo,
 
 def get_predictions(user_id=None):
     conn = connect()
-    conn.row_factory = sqlite3.Row
     c = conn.cursor()
     if user_id:
         c.execute("SELECT * FROM predictions WHERE user_id=? ORDER BY timestamp DESC", (user_id,))
@@ -126,12 +122,19 @@ def get_outcome_stats():
     than be handed a confident-looking percentage.
     """
     conn = connect()
-    conn.row_factory = sqlite3.Row
     c = conn.cursor()
     c.execute("""SELECT id, probability, predicted_class, outcome, threshold_used,
                         model_version, model_used, timestamp, outcome_at
                  FROM predictions WHERE outcome IS NOT NULL""")
-    rows = [dict(r) for r in c.fetchall()]
+    # Keep only rows whose outcome is 0 or 1.
+    #
+    # The arithmetic below sums this column. A row holding anything else — which is
+    # what a string written by an older build looks like — makes `sum(obs)` raise
+    # TypeError, and the caller catches that and returns an empty summary. The whole
+    # deployed-performance panel then goes blank because of one bad row, with nothing
+    # on screen to say so. Dropping the row costs one observation; keeping it cost the
+    # entire feature.
+    rows = [dict(r) for r in c.fetchall() if r["outcome"] in (0, 1)]
     c.execute("SELECT COUNT(*) FROM predictions")
     total = c.fetchone()[0]
     conn.close()

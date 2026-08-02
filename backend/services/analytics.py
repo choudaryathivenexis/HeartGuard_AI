@@ -6,6 +6,7 @@ that quietly disagrees with the page next to it the moment one of them is edited
 """
 from __future__ import annotations
 
+import logging
 from collections import Counter
 
 from backend.domain import artifacts
@@ -27,6 +28,13 @@ def outcome_summary() -> dict:
     try:
         summary, per_model = db.get_outcome_stats()
     except Exception:
+        # Fail soft, but NOT silently. This handler once turned a TypeError from a
+        # single malformed row into a permanently empty panel: the page rendered, the
+        # statistics never appeared, and nothing anywhere recorded why. An empty panel
+        # is still the right thing to show a clinician; an unlogged one is how a dead
+        # feature survives a release.
+        logging.getLogger(__name__).exception(
+            "outcome statistics unavailable; showing an empty summary")
         return {"summary": {}, "per_model": []}
     return {"summary": summary or {}, "per_model": list(per_model or [])}
 

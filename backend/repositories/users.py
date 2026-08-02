@@ -8,10 +8,8 @@ review.
 
 from __future__ import annotations
 
-import sqlite3
-
 from .audit import log_activity
-from .connection import connect
+from .connection import IntegrityError, connect, insert_returning_id
 from .security import hash_password, verify_password, _is_legacy_hash
 
 
@@ -20,7 +18,6 @@ from .security import hash_password, verify_password, _is_legacy_hash
 # ─────────────────────────────────────────────
 def validate_login(username, password):
     conn = connect()
-    conn.row_factory = sqlite3.Row
     c = conn.cursor()
     c.execute("SELECT * FROM users WHERE username=?", (username,))
     row = c.fetchone()
@@ -52,15 +49,25 @@ def register_user(username, password, role, fullname, email, specialisation=""):
     conn = connect()
     c = conn.cursor()
     try:
-        c.execute("""
+        # The id comes back from the INSERT itself. `cursor.lastrowid` is SQLite's and
+        # is always None on psycopg, so reading it there would have handed the caller a
+        # null id without raising — and `register_user` returns that id straight to the
+        # audit log and the redirect.
+        uid = insert_returning_id(c, """
             INSERT INTO users (username,password_hash,role,fullname,email,specialisation)
             VALUES (?,?,?,?,?,?)
         """, (username, hash_password(password), role, fullname, email, specialisation))
         conn.commit()
-        uid = c.lastrowid
         log_activity(uid, username, "Registration", f"New {role} account created.")
         return uid, None
-    except sqlite3.IntegrityError:
+    except IntegrityError:
+        # Postgres aborts the whole transaction on a constraint violation and refuses
+        # every later statement on that connection until it is rolled back. Closing
+        # would do it implicitly, but the pool hands this connection to the next
+        # caller — an explicit rollback is what keeps that caller's first query from
+        # failing with InFailedSqlTransaction for a reason nothing in its own code
+        # explains.
+        conn.rollback()
         return None, "taken"
     finally:
         conn.close()
@@ -71,7 +78,6 @@ def register_user(username, password, role, fullname, email, specialisation=""):
 # ─────────────────────────────────────────────
 def get_all_users():
     conn = connect()
-    conn.row_factory = sqlite3.Row
     c = conn.cursor()
     c.execute("SELECT id,username,role,fullname,email,specialisation,is_banned,created_at FROM users ORDER BY id")
     rows = [dict(r) for r in c.fetchall()]
@@ -88,7 +94,6 @@ def get_user_by_id(user_id):
     their original privileges until they chose to log out.
     """
     conn = connect()
-    conn.row_factory = sqlite3.Row
     c = conn.cursor()
     c.execute("SELECT * FROM users WHERE id=?", (user_id,))
     row = c.fetchone()

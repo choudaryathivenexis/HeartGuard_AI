@@ -4,6 +4,13 @@
 {% block content %}
   {{ m.pagehead("Dataset management", "The training dataset behind the models.") }}
 
+  {# Said up front rather than only when the upload is attempted: the file picker below
+     still renders, and an administrator should know before choosing a file that this
+     host will not accept it. #}
+  {% if read_only %}
+    {{ m.alert("warning", "Read-only deployment", read_only_notice) }}
+  {% endif %}
+
   {% if info.exists %}
     <div class="stats">
       {{ m.stat("Rows", fmt.count(info.rows)) }}
