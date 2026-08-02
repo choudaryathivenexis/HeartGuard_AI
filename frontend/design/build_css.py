@@ -378,27 +378,34 @@ table.data tr:hover td { background: var(--hg-raised); }
    AUTH
    ═══════════════════════════════════════════════════════════════════ */
 .auth { display: flex; min-height: 100vh; }
+
+/* The brand side is now ARTWORK AND A LOGO, nothing else. The statement and the three
+   trust markers that used to sit here were removed on request: they made the panel a
+   second page to read before signing in, and the numbers they quoted are on the model
+   performance page where a reader can act on them. */
 .auth__brandside {
-  flex: 0 0 44%; background: var(--hg-text-heading); color: #fff;
-  padding: 56px clamp(28px, 4vw, 56px);
-  display: flex; flex-direction: column; justify-content: center;
-  position: relative; overflow: hidden;
+  flex: 0 0 46%; color: #fff;
+  padding: clamp(32px, 4vw, 56px);
+  display: flex; flex-direction: column; justify-content: flex-start;
+  position: relative; overflow: hidden; isolation: isolate;
+  /* Layered beneath the SVG: a warm crimson bloom top-right over a deep ink field.
+     Two gradients rather than one flat colour because a single solid makes the
+     artwork look pasted onto the panel instead of lit within it. */
+  background:
+    radial-gradient(120% 90% at 78% 8%, rgba(194,43,74,0.22) 0%, rgba(194,43,74,0) 55%),
+    linear-gradient(158deg, #141B25 0%, var(--hg-text-heading) 46%, #080C11 100%);
 }
 .auth__brandside > * { position: relative; z-index: 1; }
-.auth__statement { font-size: 16px; line-height: 1.65; max-width: 40ch;
-                   color: rgba(255,255,255,.76); }
-.auth__markers { margin-top: var(--hg-space-8); display: flex;
-                 flex-direction: column; gap: 10px; }
-.auth__marker { display: flex; gap: var(--hg-space-4); align-items: baseline; }
-.auth__marker dt { flex: 0 0 128px; font-size: 11px; text-transform: uppercase;
-                   letter-spacing: 0.06em; color: rgba(255,255,255,.55); }
-.auth__marker dd { margin: 0; font-family: var(--hg-font-mono); font-size: 12.5px;
-                   color: rgba(255,255,255,.92); }
-.auth__art { position: absolute; inset: 0; z-index: 0; pointer-events: none; }
-.auth__art .vessels { position: absolute; top: 2%; right: -10%; width: 56%;
-                      opacity: .07; color: #fff; }
-.auth__art .trace { position: absolute; left: 0; right: 0; bottom: 10%;
-                    height: 120px; opacity: .26; color: var(--hg-primary-hover); }
+.auth__backdrop { position: absolute; inset: 0; z-index: 0; pointer-events: none; }
+.auth__backdrop svg { display: block; width: 100%; height: 100%; }
+/* A vignette over the artwork, so the logo keeps its contrast wherever the
+   composition crops to. Without it the ticks run right up under the wordmark on a
+   short viewport. */
+.auth__brandside::after {
+  content: ""; position: absolute; inset: 0; z-index: 0; pointer-events: none;
+  background: linear-gradient(180deg, rgba(8,12,17,0.72) 0%, rgba(8,12,17,0) 34%,
+              rgba(8,12,17,0) 62%, rgba(8,12,17,0.55) 100%);
+}
 .auth__formside {
   flex: 1 1 auto; display: flex; align-items: center; justify-content: center;
   padding: 48px clamp(16px, 3vw, 32px);
@@ -408,6 +415,12 @@ table.data tr:hover td { background: var(--hg-raised); }
   background: var(--hg-surface); border: 1px solid var(--hg-border);
   border-radius: var(--hg-radius-xl); box-shadow: var(--hg-shadow-e3);
 }
+/* `text-wrap: balance` earns its place here: "System administrator sign-in" wrapped
+   after the hyphen, leaving a line ending "sign-" and a line reading "in". Balancing
+   moves the break to the space. Browsers that do not support it ignore the declaration
+   and wrap as before, so there is nothing to fall back to. */
+.auth__card h1 { font-size: 26px; line-height: 1.2; margin: 0 0 6px;
+                 text-wrap: balance; }
 .auth__tabs { display: flex; gap: 4px; margin-bottom: var(--hg-space-6); }
 .auth__tab {
   flex: 1; text-align: center; padding: 7px 12px; font-size: 13px;
@@ -418,10 +431,52 @@ table.data tr:hover td { background: var(--hg-raised); }
                      background: var(--hg-primary-tint); font-weight: 600; }
 .auth__hint { font-size: 12px; color: var(--hg-text-subtle); text-align: center;
               margin: var(--hg-space-5) 0 0; }
+
+/* Who this account is for. Stated on the form rather than discovered after signing
+   in: registration always creates a Doctor, and the sign-in doors each admit one role
+   — a person at the wrong one should be able to see that before typing a password. */
+.auth__role {
+  display: flex; gap: 11px; align-items: flex-start;
+  padding: 11px 13px; margin-bottom: var(--hg-space-5);
+  border: 1px solid var(--hg-primary-border); border-radius: var(--hg-radius-lg);
+  background: var(--hg-primary-tint);
+}
+.auth__role svg { flex: 0 0 auto; color: var(--hg-primary); margin-top: 1px; }
+.auth__role strong { display: block; font-size: 12.5px; color: var(--hg-primary);
+                     letter-spacing: 0.01em; }
+.auth__role span { display: block; font-size: 11.5px; color: var(--hg-text-muted);
+                   line-height: 1.5; margin-top: 2px; }
+
+/* ── validation ──────────────────────────────────────────────────────────
+   `:user-invalid`, NOT `:invalid`. `:invalid` matches an empty required field from
+   the moment the page loads, so every field on the registration form would be
+   outlined in red before the user has typed a character — an interface scolding
+   somebody for not yet having done anything. `:user-invalid` waits until the field
+   has been interacted with or the form submitted.
+
+   There is no JavaScript in any of this: the Content-Security-Policy on this
+   application is `script-src 'none'`, so constraint validation is the browser's own,
+   backed by the identical checks in backend/web/auth.py. Client-side validation is a
+   courtesy to the user; the server's is the one that decides. */
+.field input:user-invalid,
+.field select:user-invalid {
+  border-color: var(--hg-danger-border);
+  background: var(--hg-danger-surface);
+}
+.field input:user-invalid:focus,
+.field select:user-invalid:focus {
+  outline-color: var(--hg-danger-border);
+}
+.field input:user-invalid ~ .field__hint { color: var(--hg-danger-text); }
+.field input:user-valid { border-color: var(--hg-border-control); }
+.field__req { color: var(--hg-primary); margin-left: 2px; }
+
 @media (max-width: 900px) {
   .auth { flex-direction: column; }
-  .auth__brandside { flex: none; padding: 40px 28px; }
-  .auth__art .vessels { display: none; }
+  /* A fixed height rather than content height: with the statement gone the panel
+     would otherwise collapse to the logo alone and the artwork would never be seen
+     on a phone, which is where most people will open a shared link. */
+  .auth__brandside { flex: none; min-height: 210px; padding: 28px 24px; }
 }
 
 /* ═══════════════════════════════════════════════════════════════════

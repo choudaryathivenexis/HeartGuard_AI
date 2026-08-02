@@ -297,6 +297,93 @@ with app.test_client() as c:
                   "a user at the wrong door has no way to the right one")
 
 
+# ════════════════════════════════════════════════════════════════════════
+print("\n=== 11. the sign-in artwork ===")
+with app.test_client() as c:
+    page = c.get("/login").data
+    check("the backdrop artwork is present", b"auth__backdrop" in page)
+    check("the panel text was removed", b"auth__statement" not in page
+          and b"auth__markers" not in page)
+    # The artwork is inline SVG in the page, so malformed markup does not 404 — it
+    # silently renders as nothing, or worse, swallows the rest of the document.
+    from xml.etree import ElementTree
+
+    from frontend.design import illustrations
+    svg = illustrations.auth_backdrop()
+    try:
+        ElementTree.fromstring(svg)
+        parsed = True
+    except ElementTree.ParseError as exc:
+        parsed = False
+        print(f"    {exc}")
+    check("the backdrop is well-formed XML", parsed)
+    check("it is self-contained (no external references)",
+          "http://" not in svg and "https://" not in svg.replace(
+              "http://www.w3.org", ""),
+          "an external reference would be blocked by the CSP")
+    check("nothing in it is animated", "<animate" not in svg)
+
+
+# ════════════════════════════════════════════════════════════════════════
+print("\n=== 12. registration validation is enforced SERVER-side ===")
+# The form carries required/minlength/pattern attributes, and they are worth nothing:
+# devtools removes them and curl never sees them. These cases post directly.
+_VALID = {"fullname": "Dr Probe Name", "username": "_valtest_ok",
+          "email": "probe@heartguard.local",
+          "password": "longenough123", "confirm": "longenough123"}
+
+BAD_CASES = [
+    ("a two-character username", {"username": "ab"}),
+    ("a username with spaces", {"username": "bad name"}),
+    ("a username with a symbol", {"username": "drop;table"}),
+    ("a malformed email", {"email": "not-an-email"}),
+    ("a seven-character password", {"password": "short12", "confirm": "short12"}),
+    ("mismatched passwords", {"confirm": "somethingelse"}),
+    ("a one-character full name", {"fullname": "X"}),
+    ("an empty full name", {"fullname": ""}),
+]
+
+# Self-registration can be switched off by a SuperAdmin, and /register then redirects
+# to the sign-in page without looking at the payload. Every check below would "pass"
+# against that redirect while proving nothing, so the state is read rather than assumed.
+from backend import config as _config  # noqa: E402
+
+if not _config.get_setting("allow_registration", True):
+    print("  [skip] self-registration is disabled in this installation")
+else:
+    for label, override in BAD_CASES:
+        payload = dict(_VALID)
+        payload.update(override)
+        # A distinct username per case, so a rejection cannot be mistaken for the
+        # duplicate-username refusal.
+        payload.setdefault("username", "_valtest_ok")
+        if "username" not in override:
+            payload["username"] = f"_valtest_{abs(hash(label)) % 9999}"
+        with app.test_client() as c:
+            names_before = {u["username"] for u in db.get_all_users()}
+            r = post(c, "/register", payload, follow_redirects=True)
+            created = {u["username"] for u in db.get_all_users()} - names_before
+            check(f"{label} is refused", not created,
+                  f"an account was created: {created}")
+            check(f"  and {label} is explained to the user",
+                  b"alert--danger" in r.data,
+                  "refused with no message on the page")
+
+    # The control: the same payload with nothing wrong must succeed, or the tests above
+    # would pass just as well against a form that refuses everybody.
+    with app.test_client() as c:
+        r = post(c, "/register", dict(_VALID), follow_redirects=True)
+        made = next((u for u in db.get_all_users()
+                     if u["username"] == _VALID["username"]), None)
+        check("a valid registration still succeeds", made is not None,
+              "the form refuses everything, which would make the checks above vacuous")
+        if made:
+            check("and it is created as a Doctor", made["role"] == "Doctor",
+                  str(made["role"]))
+            db.delete_user(made["id"], "portal-test")
+            print(f"  [cleanup] removed {_VALID['username']}")
+
+
 print("\n" + "=" * 66)
 print(f"FAILURES: {len(FAILURES)}")
 for failure in FAILURES:

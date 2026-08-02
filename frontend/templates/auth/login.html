@@ -19,26 +19,12 @@
 <body>
 <div class="auth">
 
+  {# The brand side carries the mark and the artwork, and nothing to read. Whatever
+     goes here competes with the form for attention, and the form is the only thing
+     anyone came to this page to use. #}
   <section class="auth__brandside">
-    {# Decorative only, and aria-hidden: it encodes no value and must not be announced. #}
-    <div class="auth__art" aria-hidden="true">
-      <div class="vessels">{{ vessel_watermark()|safe }}</div>
-      <div class="trace">{{ ecg_strip(width=900, height=110, beats=4, stroke_width=2.4)|safe }}</div>
-    </div>
-
-    <div style="margin-bottom:32px">{{ brand_lockup_mono(30, 22)|safe }}</div>
-    <p class="auth__statement">
-      Cardiovascular risk screening across {{ '{:,}'.format(rows) if rows else 'thousands of' }}
-      patient records, with the model's operating envelope disclosed on every result.
-    </p>
-
-    {% if facts %}
-      <dl class="auth__markers">
-        {% for label, value in facts %}
-          <div class="auth__marker"><dt>{{ label }}</dt><dd>{{ value }}</dd></div>
-        {% endfor %}
-      </dl>
-    {% endif %}
+    <div class="auth__backdrop" aria-hidden="true">{{ auth_backdrop()|safe }}</div>
+    {{ brand_lockup_mono(30, 22)|safe }}
   </section>
 
   <section class="auth__formside">
@@ -62,46 +48,93 @@
         <div class="alert alert--danger" role="alert"><div>{{ error }}</div></div>
       {% endif %}
 
+      {# Every constraint below is mirrored EXACTLY in backend/web/auth.py. The browser
+         checks are a courtesy — they give the message next to the field instead of
+         after a round trip — but they are trivially bypassed, so the server repeats
+         every one of them and it is the server's answer that counts.
+
+         `title` is not decoration on a `pattern`: it is the text the browser shows
+         when the pattern fails. Without it the user is told "Please match the
+         requested format" and left to guess what the format is. #}
       {% if mode == 'register' %}
-        <h1 style="font-size:26px">Create an account</h1>
-        <p class="muted" style="font-size:13px">
-          New accounts are created with the Doctor role. An administrator can change it
-          afterwards.
-        </p>
+        <h1>Create an account</h1>
+
+        <div class="auth__role">
+          {{ nav_icon("doctors", 19)|safe }}
+          <div>
+            <strong>Registering as a Doctor</strong>
+            <span>
+              This form creates a clinician account with permission to run screenings
+              and manage patients. Administrator accounts are created by a system
+              administrator, never here.
+            </span>
+          </div>
+        </div>
+
         <form method="post" action="{{ url_for('auth.register') }}">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <div class="field">
-            <label class="field__label" for="fullname">Full name</label>
+            <label class="field__label" for="fullname">
+              Full name <span class="field__req" aria-hidden="true">*</span>
+            </label>
             <input id="fullname" name="fullname" type="text" required
-                   value="{{ form.fullname if form else '' }}" autocomplete="name">
+                   minlength="2" maxlength="80"
+                   value="{{ form.fullname if form else '' }}" autocomplete="name"
+                   title="Your name as it should appear on a clinical report.">
           </div>
           <div class="field">
-            <label class="field__label" for="username">Username</label>
+            <label class="field__label" for="username">
+              Username <span class="field__req" aria-hidden="true">*</span>
+            </label>
             <input id="username" name="username" type="text" required
-                   value="{{ form.username if form else '' }}" autocomplete="username">
+                   minlength="3" maxlength="32" pattern="[A-Za-z0-9._-]{3,32}"
+                   value="{{ form.username if form else '' }}" autocomplete="username"
+                   spellcheck="false"
+                   title="3 to 32 characters: letters, digits, dot, underscore or hyphen.">
+            <div class="field__hint">
+              3–32 characters. Letters, digits, dot, underscore or hyphen.
+            </div>
           </div>
           <div class="field">
-            <label class="field__label" for="email">Email</label>
-            <input id="email" name="email" type="email" required
-                   value="{{ form.email if form else '' }}" autocomplete="email">
+            <label class="field__label" for="email">
+              Email <span class="field__req" aria-hidden="true">*</span>
+            </label>
+            <input id="email" name="email" type="email" required maxlength="120"
+                   value="{{ form.email if form else '' }}" autocomplete="email"
+                   spellcheck="false"
+                   title="A working address, e.g. name@hospital.org">
           </div>
           <div class="field">
-            <label class="field__label" for="specialisation">Specialisation <span class="subtle">(optional)</span></label>
-            <input id="specialisation" name="specialisation" type="text"
-                   value="{{ form.specialisation if form else '' }}">
+            <label class="field__label" for="specialisation">
+              Specialisation <span class="subtle">(optional)</span>
+            </label>
+            <input id="specialisation" name="specialisation" type="text" maxlength="80"
+                   value="{{ form.specialisation if form else '' }}"
+                   placeholder="Cardiologist">
           </div>
           <div class="field">
-            <label class="field__label" for="password">Password</label>
+            <label class="field__label" for="password">
+              Password <span class="field__req" aria-hidden="true">*</span>
+            </label>
             <input id="password" name="password" type="password" required
-                   minlength="8" autocomplete="new-password">
+                   minlength="8" maxlength="128" autocomplete="new-password"
+                   title="At least 8 characters.">
             <div class="field__hint">At least 8 characters.</div>
           </div>
           <div class="field">
-            <label class="field__label" for="confirm">Confirm password</label>
+            <label class="field__label" for="confirm">
+              Confirm password <span class="field__req" aria-hidden="true">*</span>
+            </label>
             <input id="confirm" name="confirm" type="password" required
-                   autocomplete="new-password">
+                   minlength="8" maxlength="128" autocomplete="new-password"
+                   title="Type the same password again.">
+            <div class="field__hint">
+              Both entries must match. Checked when you submit.
+            </div>
           </div>
-          <button class="btn btn--primary btn--block" type="submit">Create account</button>
+          <button class="btn btn--primary btn--block" type="submit">
+            Create Doctor account
+          </button>
         </form>
       {% else %}
         {% if portal.badge %}
@@ -109,22 +142,49 @@
             <span class="chip chip--neutral">{{ portal.badge }}</span>
           </p>
         {% endif %}
-        <h1 style="font-size:26px">{{ portal.heading }}</h1>
+        <h1>{{ portal.heading }}</h1>
         <p class="muted" style="font-size:13px">{{ portal.blurb }}</p>
+
+        {# Who this door is for, said before a password is typed. A person at the wrong
+           entrance cannot be told so afterwards — the refusal has to be identical to a
+           wrong password, or it confirms both the username and the password to whoever
+           typed them. This is the only honest place to say it. #}
+        <div class="auth__role">
+          {{ nav_icon(portal.role_icon, 19)|safe }}
+          <div>
+            <strong>{{ portal.role_title }}</strong>
+            <span>{{ portal.role_note }}</span>
+          </div>
+        </div>
+
         <form method="post" action="{{ url_for(portal.endpoint) }}">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="next" value="{{ request.args.get('next', '') }}">
           <div class="field">
-            <label class="field__label" for="username">Username</label>
+            <label class="field__label" for="username">
+              Username <span class="field__req" aria-hidden="true">*</span>
+            </label>
+            {# NO length or pattern rules on this form, deliberately. Registration
+               defines what a NEW username may look like; sign-in has to accept every
+               username that already exists, including any created before those rules
+               or by an administrator. A `minlength` here would lock a real account out
+               of its own application, and the person affected would have no way to
+               tell that from a forgotten password. #}
             <input id="username" name="username" type="text" required autofocus
-                   autocomplete="username">
+                   autocomplete="username" spellcheck="false"
+                   title="The username you sign in with.">
           </div>
           <div class="field">
-            <label class="field__label" for="password">Password</label>
+            <label class="field__label" for="password">
+              Password <span class="field__req" aria-hidden="true">*</span>
+            </label>
             <input id="password" name="password" type="password" required
-                   autocomplete="current-password">
+                   autocomplete="current-password"
+                   title="Your account password.">
           </div>
-          <button class="btn btn--primary btn--block" type="submit">Sign in</button>
+          <button class="btn btn--primary btn--block" type="submit">
+            {{ portal.submit }}
+          </button>
         </form>
         <p class="auth__hint">
           First run? The seeded accounts were printed to the server console when the

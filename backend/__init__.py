@@ -150,7 +150,11 @@ def _register_context(app: Flask) -> None:
             "nav_icon": _safe_icon(icons),
             "heart_mark": illustrations.heart_pulse_mark,
             "ecg_strip": illustrations.ecg_strip,
-            "vessel_watermark": illustrations.vessel_watermark,
+            # The full-bleed artwork behind the sign-in panel. `vessel_watermark` is no
+            # longer exposed: the sign-in page was its only caller, and the backdrop
+            # draws its own vessels as part of one composition rather than as a layer
+            # positioned over another.
+            "auth_backdrop": illustrations.auth_backdrop,
         }
 
 
