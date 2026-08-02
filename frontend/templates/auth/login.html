@@ -19,12 +19,19 @@
 <body>
 <div class="auth">
 
-  {# The brand side carries the mark and the artwork, and nothing to read. Whatever
-     goes here competes with the form for attention, and the form is the only thing
-     anyone came to this page to use. #}
+  {# The brand side carries the mark and the image, and nothing to read. Whatever goes
+     here competes with the form for attention, and the form is the only thing anyone
+     came to this page to use.
+
+     The image is a CSS background rather than an <img>: it is decoration with no
+     information in it, so it should not be in the document for a screen reader to
+     announce or for a print stylesheet to spend ink on.
+
+     The lockup is the THEMED one. It was the white mono version while this panel was
+     a dark ink field; the panel is now a pale photograph, and white on white is an
+     invisible logo. #}
   <section class="auth__brandside">
-    <div class="auth__backdrop" aria-hidden="true">{{ auth_backdrop()|safe }}</div>
-    {{ brand_lockup_mono(30, 22)|safe }}
+    {{ brand_lockup(30, 22)|safe }}
   </section>
 
   <section class="auth__formside">

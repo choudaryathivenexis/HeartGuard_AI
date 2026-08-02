@@ -422,27 +422,38 @@ table.data tr:hover td { background: var(--hg-raised); }
    second page to read before signing in, and the numbers they quoted are on the model
    performance page where a reader can act on them. */
 .auth__brandside {
-  flex: 0 0 46%; color: #fff;
+  flex: 0 0 46%;
   padding: clamp(32px, 4vw, 56px);
   display: flex; flex-direction: column; justify-content: flex-start;
   position: relative; overflow: hidden; isolation: isolate;
-  /* Layered beneath the SVG: a warm crimson bloom top-right over a deep ink field.
-     Two gradients rather than one flat colour because a single solid makes the
-     artwork look pasted onto the panel instead of lit within it. */
-  background:
-    radial-gradient(120% 90% at 78% 8%, rgba(194,43,74,0.22) 0%, rgba(194,43,74,0) 55%),
-    linear-gradient(158deg, #141B25 0%, var(--hg-text-heading) 46%, #080C11 100%);
+  /* The panel is a photograph now, not drawn artwork. `cover` with a centred origin
+     because the source is portrait (941x1672) and the panel is not: the image is
+     cropped to fit rather than stretched, and the heart sits near the middle of the
+     frame so a centre origin keeps it in view at every viewport this has been checked
+     at.
+
+     background-color is the pale blue-white the image resolves to at its edges. It
+     covers the instant before the file has loaded, and any hairline the browser
+     leaves at a fractional device-pixel ratio — a dark default would flash on every
+     page load. */
+  background-color: #EEF3F9;
+  background-image: url("../img/auth-hero.webp");
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  /* Both panels are now light, so the join needs stating. Without this the form side
+     bleeds into the image and the layout loses its spine. */
+  border-right: 1px solid var(--hg-border);
 }
 .auth__brandside > * { position: relative; z-index: 1; }
-.auth__backdrop { position: absolute; inset: 0; z-index: 0; pointer-events: none; }
-.auth__backdrop svg { display: block; width: 100%; height: 100%; }
-/* A vignette over the artwork, so the logo keeps its contrast wherever the
-   composition crops to. Without it the ticks run right up under the wordmark on a
-   short viewport. */
+/* A soft white scrim at the top of the panel. The image is already near-white where
+   the logo sits, so this is insurance rather than correction: the crop moves with the
+   viewport, and a wordmark that becomes unreadable at one window size is the kind of
+   fault nobody sees until a demonstration. */
 .auth__brandside::after {
   content: ""; position: absolute; inset: 0; z-index: 0; pointer-events: none;
-  background: linear-gradient(180deg, rgba(8,12,17,0.72) 0%, rgba(8,12,17,0) 34%,
-              rgba(8,12,17,0) 62%, rgba(8,12,17,0.55) 100%);
+  background: linear-gradient(180deg, rgba(255,255,255,0.88) 0%,
+              rgba(255,255,255,0.30) 16%, rgba(255,255,255,0) 32%);
 }
 .auth__formside {
   flex: 1 1 auto; display: flex; align-items: center; justify-content: center;
@@ -512,9 +523,18 @@ table.data tr:hover td { background: var(--hg-raised); }
 @media (max-width: 900px) {
   .auth { flex-direction: column; }
   /* A fixed height rather than content height: with the statement gone the panel
-     would otherwise collapse to the logo alone and the artwork would never be seen
-     on a phone, which is where most people will open a shared link. */
-  .auth__brandside { flex: none; min-height: 210px; padding: 28px 24px; }
+     would otherwise collapse to the logo alone and the image would never be seen on a
+     phone, which is where most people will open a shared link.
+
+     340px is not a round number, it is the measured one. `cover` scales this portrait
+     image to the panel width and crops the middle out vertically, so the shorter the
+     panel the narrower that band — and at 260px the band opened right on the top of
+     the heart, which then ran up behind the wordmark. At 340px the whole subject sits
+     inside the crop with clear white above it for the logo. */
+  .auth__brandside {
+    flex: none; min-height: 340px; padding: 24px;
+    border-right: 0; border-bottom: 1px solid var(--hg-border);
+  }
 }
 
 /* ═══════════════════════════════════════════════════════════════════

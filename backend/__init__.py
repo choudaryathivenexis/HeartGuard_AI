@@ -139,22 +139,15 @@ def _register_context(app: Flask) -> None:
             # colour, which is what kept it legible when the surface changed.
             "brand_lockup": lambda size=22, wordmark=16: brand.lockup(
                 size=size, wordmark_size=wordmark, dark=None),
-            # The sign-in panel is a fixed Ink surface in every theme, so its lockup
-            # cannot follow the CSS variables — `var(--hg-text-heading)` is near-black
-            # and vanishes against it, leaving only the crimson "AI" visible. A
-            # single-colour lockup in Bone is the correct treatment on brand surface.
-            "brand_lockup_mono": lambda size=30, wordmark=22: brand.lockup_mono(
-                "#FFFFFF", size=size, wordmark_size=wordmark),
+            # `brand_lockup_mono` was here for the sign-in panel while that panel was a
+            # dark Ink surface. It is a pale image now, and the themed lockup is the
+            # correct treatment on it — white on white is an invisible logo. The
+            # helper in frontend/design/brand.py stays; only this injection went.
             # Fail-soft: an icon is decoration, and a mistyped name must not be able
             # to take a whole page down with a KeyError. It renders as nothing.
             "nav_icon": _safe_icon(icons),
             "heart_mark": illustrations.heart_pulse_mark,
             "ecg_strip": illustrations.ecg_strip,
-            # The full-bleed artwork behind the sign-in panel. `vessel_watermark` is no
-            # longer exposed: the sign-in page was its only caller, and the backdrop
-            # draws its own vessels as part of one composition rather than as a layer
-            # positioned over another.
-            "auth_backdrop": illustrations.auth_backdrop,
         }
 
 

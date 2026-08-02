@@ -30,7 +30,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from backend import create_app
+from backend import config, create_app
 from backend import repositories as db
 from backend.web import auth as auth_web
 from backend.web import hardening
@@ -298,30 +298,45 @@ with app.test_client() as c:
 
 
 # ════════════════════════════════════════════════════════════════════════
-print("\n=== 11. the sign-in artwork ===")
+print("\n=== 11. the sign-in panel image ===")
+# The image is a CSS background, so a missing or misnamed file does not raise: the
+# panel renders as flat colour and everything still returns 200. Nothing about the
+# page would tell you, which is precisely why it is asserted here.
+_HERO = os.path.join(config.STATIC_DIR, "img", "auth-hero.webp")
+
+check("the image ships with the project", os.path.isfile(_HERO), _HERO)
+if os.path.isfile(_HERO):
+    _size_kb = os.path.getsize(_HERO) / 1024
+    # A login page is the first request anyone makes, often on a phone. This is not a
+    # style rule — an unoptimised export of this image was 1.3 MB.
+    check(f"it is small enough to serve ({_size_kb:.0f} KB)", _size_kb < 400,
+          f"{_size_kb:.0f} KB is too heavy for a sign-in page")
+    with open(_HERO, "rb") as _fh:
+        _magic = _fh.read(12)
+    check("it is a real WebP file",
+          _magic[:4] == b"RIFF" and _magic[8:12] == b"WEBP", str(_magic))
+
 with app.test_client() as c:
     page = c.get("/login").data
-    check("the backdrop artwork is present", b"auth__backdrop" in page)
     check("the panel text was removed", b"auth__statement" not in page
           and b"auth__markers" not in page)
-    # The artwork is inline SVG in the page, so malformed markup does not 404 — it
-    # silently renders as nothing, or worse, swallows the rest of the document.
-    from xml.etree import ElementTree
+    # Served, not just present on disk: a static route that 404s looks identical to a
+    # missing file from the browser's point of view.
+    r = c.get("/static/img/auth-hero.webp")
+    check("the image is served", r.status_code == 200, str(r.status_code))
+    check("it is served as an image", (r.headers.get("Content-Type") or "")
+          .startswith("image/"), str(r.headers.get("Content-Type")))
+    r.close()
 
-    from frontend.design import illustrations
-    svg = illustrations.auth_backdrop()
-    try:
-        ElementTree.fromstring(svg)
-        parsed = True
-    except ElementTree.ParseError as exc:
-        parsed = False
-        print(f"    {exc}")
-    check("the backdrop is well-formed XML", parsed)
-    check("it is self-contained (no external references)",
-          "http://" not in svg and "https://" not in svg.replace(
-              "http://www.w3.org", ""),
-          "an external reference would be blocked by the CSP")
-    check("nothing in it is animated", "<animate" not in svg)
+    css = c.get("/static/css/app.css").data.decode("utf-8", "replace")
+    check("the stylesheet points at it", "auth-hero.webp" in css,
+          "the panel would render as flat colour")
+    # The logo has to be the themed lockup now. The white mono version was correct on
+    # the old dark panel and is invisible on this one — a failure that renders as a
+    # blank corner rather than as an error.
+    check("the white-on-white logo is gone", b"brand_lockup_mono" not in page
+          and b"#FFFFFF" not in page.split(b"auth__formside")[0],
+          "the lockup may be white on a pale panel")
 
 
 # ════════════════════════════════════════════════════════════════════════
